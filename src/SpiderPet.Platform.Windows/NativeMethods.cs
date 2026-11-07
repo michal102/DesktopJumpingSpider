@@ -85,6 +85,49 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
+    // ---- desktop icons: the desktop is a SysListView32 inside explorer.exe, so reading it means asking
+    //      explorer to write into memory we allocated inside explorer.
+
+    public const uint PROCESS_VM_OPERATION = 0x0008;
+    public const uint PROCESS_VM_READ = 0x0010;
+    public const uint PROCESS_VM_WRITE = 0x0020;
+    public const uint MEM_COMMIT = 0x1000;
+    public const uint MEM_RESERVE = 0x2000;
+    public const uint MEM_RELEASE = 0x8000;
+    public const uint PAGE_READWRITE = 0x04;
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    [DllImport("user32.dll", EntryPoint = "FindWindowW", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string? className, string? windowName);
+
+    [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string? className, string? windowName);
+
+    [DllImport("user32.dll")]
+    public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out IntPtr result);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr VirtualAllocEx(IntPtr process, IntPtr address, UIntPtr size, uint allocationType, uint protect);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr size, uint freeType);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool ReadProcessMemory(IntPtr process, IntPtr address, out RECT buffer, UIntPtr size, out UIntPtr bytesRead);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool WriteProcessMemory(IntPtr process, IntPtr address, ref RECT buffer, UIntPtr size, out UIntPtr bytesWritten);
+
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
 

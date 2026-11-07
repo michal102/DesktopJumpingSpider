@@ -18,6 +18,8 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _speedLabel = new();
     private bool _updating;
     private readonly CheckBox _spider = new() { Content = "Show spider (Ctrl+Alt+F10)" };
+    private readonly CheckBox _iconMarks = new() { Content = "Mark desktop icons" };
+    private readonly CheckBox _lookIcons = new() { Content = "Look at nearby desktop icons" };
 
     public SettingsWindow(AppSettings settings, Action quit)
     {
@@ -60,7 +62,7 @@ public sealed class SettingsWindow : Window
             Children =
             {
                 _spider,
-                _outlines, _info, _glow, _pilot,
+                _outlines, _iconMarks, _info, _glow, _pilot, _lookIcons,
                 new TextBlock { Text = "Walking speed", Margin = new Thickness(0, 10, 0, 0) },
                 _speed, _speedLabel,
                 buttons,
@@ -77,6 +79,8 @@ public sealed class SettingsWindow : Window
             _speedLabel.Text = $"{_speed.Value:0} px/s";
             if (!_updating) _settings.BaseSpeed = _speed.Value;
         };
+        _iconMarks.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowIconMarks = _iconMarks.IsChecked == true; };
+        _lookIcons.IsCheckedChanged += (_, _) => { if (!_updating) _settings.LookAtIcons = _lookIcons.IsChecked == true; };
         _spider.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowSpider = _spider.IsChecked == true; };
 
         _settings.Changed += Refresh;
@@ -88,6 +92,8 @@ public sealed class SettingsWindow : Window
     {
         _updating = true;
         _outlines.IsChecked = _settings.ShowWindowOutlines;
+        _iconMarks.IsChecked = _settings.ShowIconMarks;
+        _lookIcons.IsChecked = _settings.LookAtIcons;
         _info.IsChecked = _settings.ShowInfoPanel;
         _glow.IsChecked = _settings.ShowGlow;
         _pilot.IsChecked = _settings.PilotMode;

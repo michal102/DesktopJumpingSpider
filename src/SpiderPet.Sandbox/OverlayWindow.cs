@@ -31,7 +31,8 @@ public sealed class OverlayWindow : Window
     private const int VkOemPlus = 0xBB, VkOemMinus = 0xBD, VkAdd = 0x6B, VkSubtract = 0x6D;
 
     private readonly SandboxView _view = new();
-    private readonly OverlayDesktopSource _source = new(new WindowsDesktopSource());
+    private readonly WindowsDesktopSource _windows = new();
+    private readonly OverlayDesktopSource _source;
     private readonly Border _hudBox;
     private readonly TextBlock _hud;
     private readonly Border _menuShield;
@@ -64,6 +65,8 @@ public sealed class OverlayWindow : Window
 
     public OverlayWindow()
     {
+        _source = new OverlayDesktopSource(_windows);
+
         Title = "Spider overlay";
         SystemDecorations = SystemDecorations.None;
         Background = Brushes.Transparent;
@@ -151,6 +154,7 @@ public sealed class OverlayWindow : Window
         }
 
         _hwnd = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        _windows.IgnoredWindow = _hwnd;
         if (_hwnd != IntPtr.Zero)
         {
             WindowsOverlay.Prepare(_hwnd, !_solid);
@@ -167,6 +171,7 @@ public sealed class OverlayWindow : Window
     {
         _tray?.Dispose();
         _tray = null;
+        _windows.Dispose();
         base.OnClosed(e);
     }
 
@@ -261,6 +266,9 @@ public sealed class OverlayWindow : Window
         _view.BaseSpeed = _settings.BaseSpeed;
         _hudBox.IsVisible = _settings.ShowInfoPanel;
         _view.SpiderVisible = _settings.ShowSpider;
+        _view.ShowIconMarks = _settings.ShowIconMarks;
+        _view.Brain.LookAtIcons = _settings.LookAtIcons;
+        _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons;
         
         if (_spiderItem is not null) _spiderItem.Header = SpiderHeader();
 
@@ -285,6 +293,7 @@ public sealed class OverlayWindow : Window
             $"spider overlay   {_view.Fps:0} fps   speed {s.Speed:0} px/s\n" +
             $"windows tracked: {_view.Watcher.Current.Windows.Count}   standing on: {_view.Perch?.Title ?? "-"}\n" +
             $"last event: {_view.LastEvent}\n" +
+            $"on desktop: {(_view.Brain.OnDesktop ? "yes" : "no")}   icons: {_view.Watcher.Current.Icons?.Count ?? 0}   looking at: {(_view.Brain.Attention is { } a ? $"icon #{a.Index}" : "cursor")}\n" +
             $"pilot: {(_settings.PilotMode ? "ON" : "off")} (Ctrl+Alt+F8)   outlines (Ctrl+Alt+F9)   quit (Ctrl+Alt+F12)\n" +
             "right-click the spider for its menu";
     }

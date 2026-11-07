@@ -39,6 +39,7 @@ RunScenario("slow creep (25 px/s)", 4.0, slow,
     });
 
 RunWindowChecks();
+RunBrainChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -154,6 +155,44 @@ void RunWindowChecks()
     double before = (sp.Legs[0].Foot - sp.Position).Length;
     sp.Translate(new Vec2(50, -30));
     Check("Translate moves feet with the body", Math.Abs((sp.Legs[0].Foot - sp.Position).Length - before) < 1e-9);
+}
+
+void RunBrainChecks()
+{
+    var spider = new Spider(new Vec2(200, 200));   // 3 px per unit -> attention radius 84 px, release at 109 px
+    var brain = new SpiderBrain();
+    var cursor = new Vec2(900, 900);
+    var none = new List<DesktopWindow>();
+
+    DesktopIcon Icon(int i, double x, double y) => new(i, new RectD(x - 24, y - 24, 48, 48));
+    DesktopSnapshot Snap(IReadOnlyList<DesktopWindow> w, params DesktopIcon[] icons) => new(cursor, w, icons);
+
+    Vec2 t = brain.Update(spider, Snap(none, Icon(0, 600, 200)));
+    Check("far icon -> keeps looking at the cursor", t == cursor && brain.Attention is null);
+
+    t = brain.Update(spider, Snap(none, Icon(0, 260, 200)));
+    Check("near icon -> looks at the icon", t == new Vec2(260, 200) && brain.Attention?.Index == 0);
+
+    brain.Update(spider, Snap(none, Icon(0, 300, 200)));
+    Check("hysteresis: still interested at 100 px", brain.Attention?.Index == 0);
+
+    t = brain.Update(spider, Snap(none, Icon(0, 330, 200)));
+    Check("loses interest beyond the release radius", brain.Attention is null && t == cursor);
+
+    brain.Update(spider, Snap(none, Icon(1, 280, 200), Icon(2, 230, 200)));
+    Check("nearest icon wins", brain.Attention?.Index == 2);
+
+    var cover = new List<DesktopWindow> { new("w", new RectD(0, 0, 500, 500), 1) };
+    t = brain.Update(spider, Snap(cover, Icon(0, 260, 200)));
+    Check("standing on a window -> ignores icons", brain.Attention is null && !brain.OnDesktop && t == cursor);
+
+    brain.LookAtIcons = false;
+    t = brain.Update(spider, Snap(none, Icon(0, 260, 200)));
+    Check("switched off -> always the cursor", brain.Attention is null && t == cursor);
+
+    brain.LookAtIcons = true;
+    t = brain.Update(spider, new DesktopSnapshot(cursor, none));
+    Check("source without icons -> cursor", t == cursor);
 }
 
 sealed class ScriptedSource : IDesktopSource

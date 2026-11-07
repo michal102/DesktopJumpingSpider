@@ -14,6 +14,9 @@ public sealed class OverlayDesktopSource : IDesktopSource
 
     private IReadOnlyList<DesktopWindow>? _lastIn;
     private IReadOnlyList<DesktopWindow> _lastOut = Array.Empty<DesktopWindow>();
+    private IReadOnlyList<DesktopIcon>? _lastIconsIn;
+    private IReadOnlyList<DesktopIcon> _lastIconsOut = Array.Empty<DesktopIcon>();
+    private double _iconOx = double.NaN, _iconOy = double.NaN, _iconScale = double.NaN;
     private double _lastOx = double.NaN, _lastOy = double.NaN, _lastScale = double.NaN;
 
     public OverlayDesktopSource(IDesktopSource inner) => _inner = inner;
@@ -51,8 +54,34 @@ public sealed class OverlayDesktopSource : IDesktopSource
             _lastScale = scale;
         }
 
+        IReadOnlyList<DesktopIcon>? icons = null;
+        if (s.Icons is not null)
+        {
+            if (!ReferenceEquals(s.Icons, _lastIconsIn) || OriginX != _iconOx || OriginY != _iconOy || scale != _iconScale)
+            {
+                var list = new List<DesktopIcon>(s.Icons.Count);
+                foreach (DesktopIcon icon in s.Icons)
+                {
+                    RectD b = icon.Bounds;
+                    list.Add(icon with
+                    {
+                        Bounds = new RectD((b.X - OriginX) / scale, (b.Y - OriginY) / scale, b.Width / scale, b.Height / scale),
+                    });
+                }
+
+                _lastIconsOut = list;
+                _lastIconsIn = s.Icons;
+                _iconOx = OriginX;
+                _iconOy = OriginY;
+                _iconScale = scale;
+            }
+
+            icons = _lastIconsOut;
+        }
+
         return new DesktopSnapshot(
             new Vec2((s.Cursor.X - OriginX) / scale, (s.Cursor.Y - OriginY) / scale),
-            _lastOut);
+            _lastOut,
+            icons);
     }
 }

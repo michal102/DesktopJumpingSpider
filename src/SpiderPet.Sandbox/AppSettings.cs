@@ -4,12 +4,20 @@ namespace SpiderPet.Sandbox;
 public sealed class AppSettings
 {
     private bool _showWindowOutlines = false;
-    private bool _showInfoPanel = true;
+    private bool _showInfoPanel = false;
     private bool _showGlow;
     private bool _pilotMode= true;
     private double _baseSpeed = 180.0;
     private bool _showSpider = true;
+    private bool _showIconMarks = false;
+    private bool _lookAtIcons = true;
     public bool ShowSpider { get => _showSpider; set => Set(ref _showSpider, value); }
+
+    /// <summary>Outline every desktop icon the program has found.</summary>
+    public bool ShowIconMarks { get => _showIconMarks; set => Set(ref _showIconMarks, value); }
+
+    /// <summary>When standing on the desktop, look at a desktop icon that is close instead of at the cursor.</summary>
+    public bool LookAtIcons { get => _lookAtIcons; set => Set(ref _lookAtIcons, value); }
 
     /// <summary>Raised after any value actually changed.</summary>
     public event Action? Changed;

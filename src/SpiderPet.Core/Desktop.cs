@@ -15,9 +15,21 @@ public readonly record struct RectD(double X, double Y, double Width, double Hei
 /// Needed to tell "this window moved" from "that window closed and another opened".</param>
 public sealed record DesktopWindow(string Title, RectD Bounds, long Id = 0);
 
+/// <summary>An icon sitting on the desktop (the icon image only, not its label).</summary>
+/// <param name="Index">Position in the desktop's item list. Not a stable identity: it changes when icons are sorted or deleted.</param>
+/// <param name="Bounds">Icon rectangle in the coordinate space of the <see cref="IDesktopSource"/>.</param>
+public sealed record DesktopIcon(int Index, RectD Bounds)
+{
+    public Vec2 Center => new(Bounds.X + Bounds.Width / 2, Bounds.Y + Bounds.Height / 2);
+}
+
 /// <param name="Cursor">Real mouse position.</param>
 /// <param name="Windows">Visible top-level windows, <b>frontmost first</b> (z-order).</param>
-public sealed record DesktopSnapshot(Vec2 Cursor, IReadOnlyList<DesktopWindow> Windows);
+/// <param name="Icons">Desktop icons, or null when the source does not know about them.</param>
+public sealed record DesktopSnapshot(
+    Vec2 Cursor,
+    IReadOnlyList<DesktopWindow> Windows,
+    IReadOnlyList<DesktopIcon>? Icons = null);
 
 /// <summary>
 /// The only thing the pet will ever need to know about the outside world.

@@ -38,6 +38,9 @@ public sealed class SandboxView : Control
         },
     };
     private static readonly IPen DebugWindowPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 80, 80)), 1.5);
+    private static readonly IPen IconMarkPen = new Pen(new SolidColorBrush(Color.FromArgb(210, 0, 200, 255)), 1.5);
+    private static readonly IPen IconAttentionPen = new Pen(new SolidColorBrush(Color.FromArgb(240, 255, 190, 0)), 2.5);
+    private static readonly IPen IconLinkPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 190, 0)), 1);
     private static readonly IPen DebugPerchPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 190, 0)), 3);
 
     private readonly HashSet<Key> _keys = new();
@@ -52,6 +55,7 @@ public sealed class SandboxView : Control
     private bool _overlay;
     private DesktopWatcher _watcher;
     private readonly WindowRider _rider = new();
+    private readonly SpiderBrain _brain = new();
 
     private Vec2 _dragOffset;
     private Vec2 _lastMousePosition;
@@ -217,6 +221,12 @@ public sealed class SandboxView : Control
 
     public bool IsDragging => _isDragging;
 
+    /// <summary>Decides where the spider looks (cursor, or a nearby desktop icon).</summary>
+    public SpiderBrain Brain => _brain;
+
+    /// <summary>Outline every desktop icon the source reports.</summary>
+    public bool ShowIconMarks { get; set; } = true;
+
     /// <summary>Soft light glow drawn under the spider.</summary>
     public bool ShowGlow { get; set; }
     
@@ -373,7 +383,7 @@ public sealed class SandboxView : Control
         Spider.Speed = _baseSpeed *
                        (sprint ? SprintFactor : 1.0);
 
-        Spider.LookTarget = _watcher.Current.Cursor;
+        Spider.LookTarget = _brain.Update(Spider, _watcher.Current);
     }
 
     private void KeepInside()
@@ -406,6 +416,8 @@ public sealed class SandboxView : Control
 
             if (ShowDebug)
                 DrawDebugWindows(context);
+            if (ShowIconMarks)
+                DrawIconMarks(context);
 
             if (_spiderVisible) { DrawGlow(context); SpiderRenderer.Draw(context, Spider); }
             return;
@@ -420,6 +432,11 @@ public sealed class SandboxView : Control
 
         foreach (DesktopWindow w in Desktop.Windows)
             DrawMockWindow(context, w);
+
+        foreach (DesktopIcon icon in Desktop.Icons)
+            context.DrawRectangle(DotBrush, null, new Rect(icon.Bounds.X, icon.Bounds.Y, icon.Bounds.Width, icon.Bounds.Height), 6, 6);
+        if (ShowIconMarks)
+            DrawIconMarks(context);
 
         Vec2 cursor = Desktop.Cursor;
         Vec2 pos = Spider.Position;
@@ -447,6 +464,26 @@ public sealed class SandboxView : Control
         if (!ShowGlow) return;
         double r = 10.0 * Spider.PixelsPerUnit;
         context.DrawEllipse(GlowBrush, null, new Point(Spider.Position.X, Spider.Position.Y), r, r);
+    }
+
+    private void DrawIconMarks(DrawingContext context)
+    {
+        IReadOnlyList<DesktopIcon>? icons = _watcher.Current.Icons;
+        if (icons is null) return;
+
+        DesktopIcon? attention = _brain.Attention;
+        foreach (DesktopIcon icon in icons)
+        {
+            var r = new Rect(icon.Bounds.X, icon.Bounds.Y, icon.Bounds.Width, icon.Bounds.Height);
+            bool looked = attention is not null && attention.Index == icon.Index;
+            context.DrawRectangle(null, looked ? IconAttentionPen : IconMarkPen, r, 6, 6);
+        }
+
+        if (attention is not null && _spiderVisible)
+        {
+            Vec2 c = attention.Center;
+            context.DrawLine(IconLinkPen, new Point(Spider.Position.X, Spider.Position.Y), new Point(c.X, c.Y));
+        }
     }
 
     private void DrawDebugWindows(DrawingContext context)
