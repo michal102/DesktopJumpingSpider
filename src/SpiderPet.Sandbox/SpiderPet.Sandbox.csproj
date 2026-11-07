@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SpiderPet.Core\SpiderPet.Core.csproj" />
+    <ProjectReference Include="..\SpiderPet.Platform.Windows\SpiderPet.Platform.Windows.csproj" />
     <AvaloniaResource Include="Assets/app-icon.ico" />
   </ItemGroup>
 

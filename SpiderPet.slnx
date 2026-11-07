@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <File Path="src/.gitignore" />
     <Project Path="src/SpiderPet.Core/SpiderPet.Core.csproj" />
+    <Project Path="src/SpiderPet.Platform.Windows/SpiderPet.Platform.Windows.csproj" />
     <Project Path="src/SpiderPet.Sandbox/SpiderPet.Sandbox.csproj" />
     <Project Path="src/SpiderPet.SimCheck/SpiderPet.SimCheck.csproj" />
   </Folder>

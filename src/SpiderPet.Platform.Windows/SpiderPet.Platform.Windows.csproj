@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Plain net8.0 on purpose: everything here is guarded by [SupportedOSPlatform("windows")] and only
+       P/Invokes into user32/dwmapi, so the project still builds on Linux/macOS CI. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SpiderPet.Platform.Windows</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SpiderPet.Core\SpiderPet.Core.csproj" />
+  </ItemGroup>
+
+</Project>

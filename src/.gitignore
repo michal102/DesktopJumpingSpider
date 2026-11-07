@@ -1,0 +1,52 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+publish/
+artifacts/
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+*.iml
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+project.lock.json
+.nuget/
+
+# Test / coverage output
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+coverage*.xml
+*.coverage
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+~$*
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Old packaged copies of source
+*.zip

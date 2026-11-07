@@ -18,6 +18,7 @@ public sealed class SandboxView : Control
     private const double WallMargin = 40.0;
     private const double MinSpeed = 20.0;
     private const double MaxSpeed = 1200.0;
+    private const double GrabRadius = 55.0;
 
     private static readonly IBrush BackdropBrush = new SolidColorBrush(Color.Parse("#E6E8EB"));
     private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.Parse("#D9DCE1")), 1);
@@ -27,6 +28,17 @@ public sealed class SandboxView : Control
     private static readonly IPen WindowPen = new Pen(new SolidColorBrush(Color.Parse("#AEB5C0")), 1);
     private static readonly IPen AimPen = new Pen(new SolidColorBrush(Color.FromArgb(70, 40, 40, 40)), 1);
     private static readonly IPen CursorPen = new Pen(new SolidColorBrush(Color.Parse("#D32F2F")), 1.5);
+    private static readonly IBrush GlowBrush = new RadialGradientBrush
+    {
+        GradientStops =
+        {
+            new GradientStop(Color.FromArgb(55, 235, 240, 255), 0.0),
+            new GradientStop(Color.FromArgb(25, 235, 240, 255), 0.1),
+            new GradientStop(Color.FromArgb(0, 235, 240, 255), 0.5),
+        },
+    };
+    private static readonly IPen DebugWindowPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 80, 80)), 1.5);
+    private static readonly IPen DebugPerchPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 190, 0)), 3);
 
     private readonly HashSet<Key> _keys = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -37,6 +49,9 @@ public sealed class SandboxView : Control
     
     private bool _isDragging;
     private bool _showCursorOverlay = true;
+    private bool _overlay;
+    private DesktopWatcher _watcher;
+    private readonly WindowRider _rider = new();
 
     private Vec2 _dragOffset;
     private Vec2 _lastMousePosition;
@@ -61,6 +76,17 @@ public sealed class SandboxView : Control
 
         var point = e.GetCurrentPoint(this);
 
+        if (point.Properties.IsRightButtonPressed)
+        {
+            var at = new Vec2(point.Position.X, point.Position.Y);
+            if (!_isDragging && IsOverSpider(at))
+            {
+                SpiderMenuRequested?.Invoke(at);
+                e.Handled = true;
+            }
+            return;
+        }
+
         if (!point.Properties.IsLeftButtonPressed)
             return;
 
@@ -75,7 +101,7 @@ public sealed class SandboxView : Control
 
         double distance = Math.Sqrt(dx * dx + dy * dy);
 
-        if (distance > 55)
+        if (distance > GrabRadius)
             return;
 
         _isDragging = true;
@@ -131,7 +157,7 @@ public sealed class SandboxView : Control
             double dx = mouse.X - Spider.Position.X;
             double dy = mouse.Y - Spider.Position.Y;
 
-            _isPointerOverSpider = (dx * dx + dy * dy) <= (55 * 55);
+            _isPointerOverSpider = (dx * dx + dy * dy) <= (GrabRadius * GrabRadius);
         }
 
         // Choose the appropriate cursor:
@@ -165,6 +191,9 @@ public sealed class SandboxView : Control
         Cursor = new Cursor(StandardCursorType.None);
         ClipToBounds = true;
 
+        _watcher = new DesktopWatcher(Desktop);
+        HookWatcher();
+
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(8), DispatcherPriority.Render, OnTick);
     }
 
@@ -174,10 +203,83 @@ public sealed class SandboxView : Control
 
     public double Fps => _fps;
 
+    /// <summary>Window and cursor tracking. In the sandbox it watches <see cref="Desktop"/>; in overlay mode the real desktop.</summary>
+    public DesktopWatcher Watcher => _watcher;
+
+    /// <summary>The window the spider is currently standing on (it is carried along when that window moves), or null.</summary>
+    public DesktopWindow? Perch => _rider.Riding;
+
+    /// <summary>Human-readable description of the last window event, for the HUD.</summary>
+    public string LastEvent { get; private set; } = "-";
+
+    /// <summary>Draw outlines of the tracked windows (overlay mode only).</summary>
+    public bool ShowDebug { get; set; } = true;
+
+    public bool IsDragging => _isDragging;
+
+    /// <summary>Soft light glow drawn under the spider.</summary>
+    public bool ShowGlow { get; set; }
+    
+    private bool _spiderVisible = true;
+    public bool SpiderVisible
+    {
+        get => _spiderVisible;
+        set { _spiderVisible = value; InvalidateVisual(); }
+    }
+
+    /// <summary>Walking speed in px/s before sprint, clamped to the allowed range.</summary>
+    public double BaseSpeed
+    {
+        get => _baseSpeed;
+        set => _baseSpeed = Math.Clamp(value, MinSpeed, MaxSpeed);
+    }
+
+    /// <summary>Right button pressed on the spider; argument is the position in view coordinates.</summary>
+    public event Action<Vec2>? SpiderMenuRequested;
+
+    /// <summary>True when <paramref name="p"/> (view coordinates) is within grabbing distance of the spider.</summary>
+    public bool IsOverSpider(Vec2 p)
+    {
+        if (!_spiderVisible) return false;
+        
+        double dx = p.X - Spider.Position.X;
+        double dy = p.Y - Spider.Position.Y;
+        return dx * dx + dy * dy <= GrabRadius * GrabRadius;
+    }
+
+    /// <summary>Raised at the start of every simulation frame, before the desktop is polled.</summary>
+    public event Action? BeforeUpdate;
+
+    /// <summary>
+    /// Switches the view to transparent-overlay mode driven by a real desktop: no backdrop, no mock windows or
+    /// mock cursor, the OS cursor is used, and coordinates come from <paramref name="source"/>
+    /// (which must already be expressed in this view's coordinate space).
+    /// </summary>
+    public void UseOverlayDesktop(IDesktopSource source)
+    {
+        _overlay = true;
+        _watcher = new DesktopWatcher(source);
+        HookWatcher();
+        ShowCursorOverlay = false;
+    }
+
+    private void HookWatcher()
+    {
+        _watcher.WindowAppeared += w => LastEvent = $"opened: {w.Title}";
+        _watcher.WindowClosed += w => LastEvent = $"closed: {w.Title}";
+        _watcher.WindowMoved += (before, now) =>
+            LastEvent = (before.Bounds.Width == now.Bounds.Width && before.Bounds.Height == now.Bounds.Height
+                ? "moved: " : "resized: ") + now.Title;
+    }
+
     /// <summary>Raised once per simulation frame, after the spider has been updated.</summary>
     public event Action? Frame;
 
-    public void SetMouse(Vec2 position) => Desktop.Cursor = position;
+    public void SetMouse(Vec2 position)
+    {
+        if (!_overlay)
+            Desktop.Cursor = position;
+    }
 
     public void SetKey(Key key, bool down)
     {
@@ -228,6 +330,14 @@ public sealed class SandboxView : Control
 
         _fps = _fps <= 0.0 ? 1.0 / dt : _fps * 0.92 + (1.0 / dt) * 0.08;
 
+        BeforeUpdate?.Invoke();
+        if (!_spiderVisible) { Frame?.Invoke(); return; }
+
+        DesktopSnapshot snapshot = _watcher.Poll();
+        Vec2 carry = _rider.Update(dt, Spider.Position, snapshot.Windows, _isDragging);
+        if (carry != Vec2.Zero)
+            Spider.Translate(carry);
+
         ApplyInput();
         Spider.Update(dt);
         KeepInside();
@@ -263,7 +373,7 @@ public sealed class SandboxView : Control
         Spider.Speed = _baseSpeed *
                        (sprint ? SprintFactor : 1.0);
 
-        Spider.LookTarget = Desktop.GetSnapshot().Cursor;
+        Spider.LookTarget = _watcher.Current.Cursor;
     }
 
     private void KeepInside()
@@ -287,6 +397,20 @@ public sealed class SandboxView : Control
     public override void Render(DrawingContext context)
     {
         var area = new Rect(Bounds.Size);
+
+        if (_overlay)
+        {
+            // Fully transparent, but it must be drawn: Avalonia hit-tests custom controls against what they
+            // draw, so without this the spider could only be grabbed by touching its exact outline.
+            context.DrawRectangle(Brushes.Transparent, null, area);
+
+            if (ShowDebug)
+                DrawDebugWindows(context);
+
+            if (_spiderVisible) { DrawGlow(context); SpiderRenderer.Draw(context, Spider); }
+            return;
+        }
+
         context.FillRectangle(BackdropBrush, area);
 
         for (double x = 0; x < area.Width; x += 80)
@@ -309,11 +433,29 @@ public sealed class SandboxView : Control
             );
         }
 
+        DrawGlow(context);
         SpiderRenderer.Draw(context, Spider);
 
         if (ShowCursorOverlay)
         {
             DrawCursor(context, cursor);
+        }
+    }
+
+    private void DrawGlow(DrawingContext context)
+    {
+        if (!ShowGlow) return;
+        double r = 10.0 * Spider.PixelsPerUnit;
+        context.DrawEllipse(GlowBrush, null, new Point(Spider.Position.X, Spider.Position.Y), r, r);
+    }
+
+    private void DrawDebugWindows(DrawingContext context)
+    {
+        long? perch = _rider.RidingId;
+        foreach (DesktopWindow w in _watcher.Current.Windows)
+        {
+            var r = new Rect(w.Bounds.X, w.Bounds.Y, w.Bounds.Width, w.Bounds.Height);
+            context.DrawRectangle(null, perch == w.Id ? DebugPerchPen : DebugWindowPen, r);
         }
     }
 

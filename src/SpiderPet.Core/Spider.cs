@@ -90,6 +90,22 @@ public sealed class Spider
 
     public Vec2 Velocity { get; set; }
 
+    /// <summary>
+    /// Moves the whole spider by <paramref name="delta"/> <b>including its planted feet</b>, as if the
+    /// ground under it slid (a window being dragged). Unlike setting <see cref="Position"/> it does not
+    /// make the legs stretch and re-step.
+    /// </summary>
+    public void Translate(Vec2 delta)
+    {
+        Position += delta;
+        foreach (SpiderLeg leg in _legs)
+        {
+            leg.Foot += delta;
+            leg.StepFrom += delta;
+            leg.StepTo += delta;
+        }
+    }
+
     /// <summary>Carapace heading in degrees, 0 = up, clockwise positive, (-180, 180].</summary>
     public double HeadingDeg { get; private set; }
 
