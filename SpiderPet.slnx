@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SpiderPet.Core/SpiderPet.Core.csproj" />
+    <Project Path="src/SpiderPet.Sandbox/SpiderPet.Sandbox.csproj" />
+    <Project Path="src/SpiderPet.SimCheck/SpiderPet.SimCheck.csproj" />
+  </Folder>
+</Solution>
