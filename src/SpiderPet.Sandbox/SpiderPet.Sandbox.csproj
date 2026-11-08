@@ -10,15 +10,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.2" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.2" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.2" />
+    <PackageReference Include="Avalonia" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.12" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\SpiderPet.Core\SpiderPet.Core.csproj" />
     <ProjectReference Include="..\SpiderPet.Platform.Windows\SpiderPet.Platform.Windows.csproj" />
     <AvaloniaResource Include="Assets/app-icon.ico" />
+    <AvaloniaResource Include="Assets/spider.ico" />
   </ItemGroup>
 
 </Project>

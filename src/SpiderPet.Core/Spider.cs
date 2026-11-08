@@ -300,6 +300,110 @@ public sealed class Spider
             Step(h, i == n - 1);
     }
 
+    // ---------------------------------------------------------------- stepped turning
+
+    /// <summary>
+    /// Real spiders turn in a few discrete snaps rather than one smooth sweep. When true, a turn is split into steps
+    /// (about one per <see cref="StepSpanDeg"/> degrees, at most <see cref="MaxSteps"/>): a small turn is a single
+    /// quick move, a half turn takes several, each followed by a brief pause. Off = the smooth turn controller.
+    /// </summary>
+    public bool SteppedTurning { get; set; }
+
+    /// <summary>A turn gets roughly one step per this many degrees (so 100 deg = 2 steps, 180 deg = 4).</summary>
+    public double StepSpanDeg { get; set; } = 45.0;
+
+    /// <summary>Largest number of steps one turn is split into.</summary>
+    public int MaxSteps { get; set; } = 5;
+
+    /// <summary>Average speed during a step, deg/s (each step is eased in and out, so it never looks like a snap).</summary>
+    public double StepRateDeg { get; set; } = 420.0;
+
+    /// <summary>Pause between two steps of one turn, seconds.</summary>
+    public double StepPauseSeconds { get; set; } = 0.06;
+
+    /// <summary>Heading errors smaller than this are left alone, degrees.</summary>
+    public double StepMinDeg { get; set; } = 4.0;
+
+    private int _stepsLeft;         // steps still to do in the current turn (0 = no turn planned)
+    private double _stepFrom;       // heading at the start of the running step
+    private double _stepDelta;      // signed size of the running step, 0 = not stepping
+    private double _stepT;          // seconds into the running step
+    private double _stepDur;        // duration of the running step
+    private double _stepHold;       // seconds to wait before the next step
+
+    private void SteppedTurn(double dt, double? target)
+    {
+        if (_stepDelta == 0.0)
+        {
+            if (_stepHold > 0.0)
+                _stepHold -= dt;
+
+            if (target is not double tgt)
+            {
+                _stepsLeft = 0;
+            }
+            else
+            {
+                double delta = MathUtil.Wrap(tgt - HeadingDeg);
+                if (Math.Abs(delta) < StepMinDeg)
+                {
+                    _stepsLeft = 0;
+                }
+                else if (_stepHold <= 0.0)
+                {
+                    // plan a new turn: the number of steps depends on how far there is to go
+                    if (_stepsLeft <= 0)
+                        _stepsLeft = Math.Clamp((int)Math.Round(Math.Abs(delta) / StepSpanDeg), 1, Math.Max(1, MaxSteps));
+
+                    // each step covers an equal share of what is left, so a moving target is simply followed
+                    _stepDelta = delta / _stepsLeft;
+                    _stepsLeft--;
+                    _stepFrom = HeadingDeg;
+                    _stepT = 0.0;
+                    _stepDur = Math.Clamp(Math.Abs(_stepDelta) / StepRateDeg, 0.07, 0.35);
+                }
+            }
+        }
+
+        if (_stepDelta == 0.0)
+        {
+            AngularVelocityDeg = 0.0;
+            _cmdTurn = 0.0;
+            return;
+        }
+
+        double before = HeadingDeg;
+        _stepT = Math.Min(_stepDur, _stepT + dt);
+        double k = _stepT / _stepDur;
+        double eased = k * k * (3.0 - 2.0 * k);
+        HeadingDeg = MathUtil.Wrap(_stepFrom + _stepDelta * eased);
+        double moved = MathUtil.Wrap(HeadingDeg - before);
+
+        // The gait and the foot prediction read these; a fraction of the real speed keeps the legs calm.
+        AngularVelocityDeg = moved / dt * 0.35;
+        _cmdTurn = Math.Sign(moved) * StepRateDeg * 0.35;
+
+        if (_stepT >= _stepDur)
+        {
+            _stepDelta = 0.0;
+            _stepHold = _stepsLeft > 0 ? StepPauseSeconds : 0.0;
+        }
+    }
+
+    // ---------------------------------------------------------------- reaching
+
+    /// <summary>
+    /// A world point the two front legs reach for, like hands towards something held out to the spider.
+    /// Null = normal stance. The legs ease in and out, so setting and clearing it is always smooth.
+    /// </summary>
+    public Vec2? ReachTarget { get; set; }
+
+    /// <summary>0..1: how far into the reach pose the front legs are right now.</summary>
+    public double ReachAmount => _reach;
+
+    private double _reach;
+    private double _reachTime;
+
     private Vec2 HomeWorld(SpiderLeg leg) => Position + GetDynamicHomeLocal(leg).Rotated(HeadingDeg);
 
     private Vec2 HomeAt(SpiderLeg leg, double lead)
@@ -327,15 +431,25 @@ public sealed class Spider
         else if (LookTarget is null && Velocity.Length > 5.0)
             target = MathUtil.HeadingFromTo(Vec2.Zero, Velocity);
 
-        double want = 0.0;
-        if (target is double tgt)
+        if (SteppedTurning)
         {
-            double delta = MathUtil.Wrap(tgt - HeadingDeg);
-            want = Math.Clamp(delta * TurnGain, -TurnRate, TurnRate);
+            SteppedTurn(dt, target);
         }
-        _cmdTurn = want;
-        AngularVelocityDeg = MathUtil.MoveToward(AngularVelocityDeg, want, TurnAcceleration * dt);
-        HeadingDeg = MathUtil.Wrap(HeadingDeg + AngularVelocityDeg * dt);
+        else
+        {
+            _stepsLeft = 0;
+            _stepDelta = 0.0;
+
+            double want = 0.0;
+            if (target is double tgt)
+            {
+                double delta = MathUtil.Wrap(tgt - HeadingDeg);
+                want = Math.Clamp(delta * TurnGain, -TurnRate, TurnRate);
+            }
+            _cmdTurn = want;
+            AngularVelocityDeg = MathUtil.MoveToward(AngularVelocityDeg, want, TurnAcceleration * dt);
+            HeadingDeg = MathUtil.Wrap(HeadingDeg + AngularVelocityDeg * dt);
+        }
 
         // ---- velocity
         Vec2 input = MoveInput;
@@ -370,6 +484,12 @@ public sealed class Spider
 
         if (IsGrabbed)
             _grabTime += dt;
+
+        _reach = MathUtil.MoveToward(_reach, ReachTarget is null ? 0.0 : 1.0, dt / 0.2);
+        if (_reach > 0.0)
+            _reachTime += dt;
+        else
+            _reachTime = 0.0;
 
         UpdateLegs(dt);
         UpdatePose(buildGeometry);
@@ -539,6 +659,21 @@ public sealed class Spider
 
                 // Apply the movement to the IK target, not the actual foot.
                 aim += squirm.Rotated(HeadingDeg);
+            }
+
+            if (_reach > 0.0 && leg.Index == 0 && ReachTarget is Vec2 reachAt)
+            {
+                // Front legs go for the item from both sides and pat at it in turns.
+                double e = _reach * _reach * (3.0 - 2.0 * _reach);
+                double pat = Math.Sin(_reachTime * 9.0 + (leg.Side > 0 ? Math.PI : 0.0)) * 0.35 * _u;
+                Vec2 want = reachAt + new Vec2(leg.Side * 0.9 * _u, pat).Rotated(HeadingDeg);
+                Vec2 rv = want - leg.Hip;
+                double rl = rv.Length;
+                double lo = leg.MinReach * 1.05;
+                double hi = leg.Full * 0.97;
+                if (rl > hi) rv = rv * (hi / rl);
+                else if (rl < lo && rl > 1e-6) rv = rv * (lo / rl);
+                aim = aim.Lerp(leg.Hip + rv, e);
             }
 
             if (leg.Lift > 0.0)

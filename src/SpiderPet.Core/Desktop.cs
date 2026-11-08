@@ -40,3 +40,19 @@ public interface IDesktopSource
 {
     DesktopSnapshot GetSnapshot();
 }
+
+/// <summary>
+/// Optional capability of a desktop source: identify and move icons on the desktop.
+/// Positions use the same coordinate space as <see cref="DesktopSnapshot"/>.
+/// </summary>
+public interface IDesktopIconControl
+{
+    /// <summary>Index of the desktop icon whose label equals one of <paramref name="displayNames"/> (case-insensitive), or -1.</summary>
+    int FindIcon(IReadOnlyList<string> displayNames);
+
+    /// <summary>
+    /// Moves the icon so that its centre ends up at <paramref name="center"/>. Returns false when that is not possible
+    /// (desktop icons hidden, explorer not reachable, auto-arrange on...). The shell may snap the icon to its grid.
+    /// </summary>
+    bool MoveIcon(int index, Vec2 center);
+}

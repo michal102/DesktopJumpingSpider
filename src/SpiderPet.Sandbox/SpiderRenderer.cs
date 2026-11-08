@@ -154,6 +154,27 @@ internal static class SpiderRenderer
         }
     }
 
+    public static void DrawBodyRim(DrawingContext ctx, Spider spider, Pen pen)
+    {
+        double svgScale = 5.0 * spider.PixelsPerUnit / SvgCarapaceHeight;
+        // the art is drawn through a scale transform, which would shrink the stroke too
+        var scaled = new Pen(pen.Brush, pen.Thickness / svgScale) { LineJoin = PenLineJoin.Round, LineCap = PenLineCap.Round };
+
+        Vec2 pedicel = spider.Position + new Vec2(0.0, 2.6 * spider.PixelsPerUnit).Rotated(spider.HeadingDeg);
+
+        using (ctx.PushTransform(
+                   Matrix.CreateScale(svgScale, svgScale) *
+                   Matrix.CreateRotation(spider.AbdomenDeg * MathUtil.DegToRad) *
+                   Matrix.CreateTranslation(pedicel.X, pedicel.Y)))
+            ctx.DrawGeometry(null, scaled, AbdomenGeo);
+
+        using (ctx.PushTransform(
+                   Matrix.CreateScale(svgScale, svgScale) *
+                   Matrix.CreateRotation(spider.HeadingDeg * MathUtil.DegToRad) *
+                   Matrix.CreateTranslation(spider.Position.X, spider.Position.Y)))
+            ctx.DrawGeometry(null, scaled, CarapaceAndPalpsGeo);
+    }
+    
     private const double SvgLegThicknessScale = 0.85;
 
     private static void DrawSegment(

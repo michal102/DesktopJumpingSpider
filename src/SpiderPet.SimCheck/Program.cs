@@ -41,6 +41,8 @@ RunScenario("slow creep (25 px/s)", 4.0, slow,
 RunWindowChecks();
 RunBrainChecks();
 RunCarryChecks();
+RunDropFeatureChecks();
+RunStateChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -256,6 +258,128 @@ void RunBrainChecks()
     ob.Update(Dt, spider, new DesktopSnapshot(cursor, new List<DesktopWindow>()));
     t = ob.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
     Check("reactions switched off -> cursor", t == cursor);
+}
+
+void RunDropFeatureChecks()
+{
+    Check("junk by name is junk", FilePolicy.Judge("Microsoft Edge.lnk").Verdict == FileVerdict.Junk
+                                  || FilePolicy.Judge("setup.tmp").Verdict == FileVerdict.Junk);
+    Check("a normal file is worthy", FilePolicy.Judge("holiday photos.jpg").Verdict == FileVerdict.Worthy);
+    Check("the verdict and quip are deterministic",
+        FilePolicy.Judge("report.docx") == FilePolicy.Judge("report.docx"));
+
+    Check("opposite corners",
+        SpiderCarry.Opposite(SpiderCorner.TopRight) == SpiderCorner.BottomLeft
+        && SpiderCarry.Opposite(SpiderCorner.TopLeft) == SpiderCorner.BottomRight);
+
+    var area = new RectD(0, 0, 1000, 800);
+    Vec2 slot = SpiderCarry.FindCornerSlot(area, SpiderCorner.TopRight, new List<DesktopIcon>(), -1);
+    Check("the hoard slot is inside the area, in the right corner", area.Contains(slot) && slot.X > 500 && slot.Y < 400);
+
+    const double dt = 1.0 / 120.0;
+    var spider = new Spider(new Vec2(300, 300));
+    var carry = new SpiderCarry();
+    Vec2? placed = null;
+    carry.Placed += p => placed = p;
+    carry.Start(new Vec2(330, 310), new Vec2(900, 300));
+    for (int i = 0; i < 60; i++) { carry.Update(dt, spider); spider.Update(dt); }
+    var target = new Vec2(300, 600);
+    Check("double click redirects a running carry", carry.Redirect(target) && carry.Pinned);
+    for (int i = 0; i < 120 * 40 && carry.Phase != CarryPhase.Rest; i++) { carry.Update(dt, spider); spider.Update(dt); }
+    Check("the item ends up at the double-click spot", placed is Vec2 pv && (pv - target).Length < 60);
+    Check("redirect after set-down is refused", !carry.Redirect(new Vec2(10, 10)));
+
+    var s2 = new Spider(new Vec2(300, 300));
+    var gift = new SpiderCarry { WaitForCursorSeconds = 1.0 };
+    gift.Start(new Vec2(300, 300), new Vec2(300, 300), new CarryOptions(BringToCursor: true));
+    for (int i = 0; i < 120 * 12 && gift.Phase != CarryPhase.Rest; i++)
+    {
+        gift.Update(dt, s2, new Vec2(300, 300)); // cursor never leaves
+        s2.Update(dt);
+    }
+    Check("gift mode gives up waiting instead of hanging", gift.Phase == CarryPhase.Rest);
+
+}
+
+int CountTurnBursts(double targetDeg, out double finalErr)
+{
+    var sp = new Spider(new Vec2(500, 500), 0.0) { SteppedTurning = true };
+    double rad = targetDeg * Math.PI / 180.0;
+    sp.LookTarget = sp.Position + new Vec2(Math.Sin(rad), -Math.Cos(rad)) * 1000;
+    const double dt = 1.0 / 120.0;
+    int bursts = 0;
+    bool moving = false;
+    for (int i = 0; i < 120 * 4; i++)
+    {
+        sp.Update(dt);
+        bool now = Math.Abs(sp.AngularVelocityDeg) > 1e-6;
+        if (now && !moving) bursts++;
+        moving = now;
+    }
+    finalErr = Math.Abs(MathUtilWrap(sp.HeadingDeg - targetDeg));
+    return bursts;
+}
+
+double MathUtilWrap(double d)
+{
+    d %= 360.0;
+    if (d > 180) d -= 360;
+    if (d <= -180) d += 360;
+    return d;
+}
+
+void RunStateChecks()
+{
+    int small = CountTurnBursts(20, out double e1);
+    int big = CountTurnBursts(170, out double e2);
+    Check("a small turn is one single move", small == 1 && e1 < 5);
+    Check("a big turn is split into several steps", big >= 3 && big <= 5 && e2 < 5);
+
+    // reaching: the front legs go for the target
+    var sp = new Spider(new Vec2(400, 400), 0.0);
+    for (int i = 0; i < 60; i++) sp.Update(1.0 / 120.0);
+    var target = new Vec2(400, 360);
+    Vec2 before = sp.Legs[0].Tip;
+    sp.ReachTarget = target;
+    for (int i = 0; i < 120; i++) sp.Update(1.0 / 120.0);
+    double dBefore = (before - target).Length, dAfter = (sp.Legs[0].Tip - target).Length;
+    Check("front legs reach towards the item", sp.ReachAmount > 0.99 && dAfter < dBefore);
+    sp.ReachTarget = null;
+    for (int i = 0; i < 120; i++) sp.Update(1.0 / 120.0);
+    Check("legs relax afterwards", sp.ReachAmount < 0.01);
+
+    // state machine priorities
+    var spider = new Spider(new Vec2(300, 300));
+    var brain = new SpiderBrain();
+    var snap = new DesktopSnapshot(new Vec2(600, 300), new List<DesktopWindow>());
+    var seen = new List<SpiderState>();
+    brain.StateChanged += (_, n) => seen.Add(n);
+
+    brain.Think(0.1, spider, snap, default);
+    Check("default state is watching the cursor", brain.State == SpiderState.Watching);
+
+    Vec2? look = brain.Think(0.1, spider, snap, new BrainContext(HoverPoint: new Vec2(310, 300)));
+    Check("hovering item -> reaching, looks at it", brain.State == SpiderState.Reaching && look == new Vec2(310, 300) && brain.ReachPoint is not null);
+
+    look = brain.Think(0.1, spider, snap, new BrainContext(Carrying: true, HoverPoint: new Vec2(310, 300)));
+    Check("carrying overrides reaching and leaves looking to the carry task", brain.State == SpiderState.Carrying && look is null && brain.ReachPoint is null);
+
+    look = brain.Think(0.1, spider, snap, new BrainContext(Held: true, Carrying: true));
+    Check("held overrides everything", brain.State == SpiderState.Held && look is null);
+
+    brain.NotifyDropped(new Vec2(340, 300));
+    look = brain.Think(0.1, spider, snap, default);
+    Check("tap-drop -> looks at what it dropped", brain.State == SpiderState.Dropping && look == new Vec2(340, 300));
+    for (int i = 0; i < 10; i++) brain.Think(0.1, spider, snap, default);
+    Check("dropping state ends by itself", brain.State == SpiderState.Watching);
+    Check("state changes were reported", seen.Contains(SpiderState.Reaching) && seen.Contains(SpiderState.Dropping));
+
+    // dropping on tap fires Placed and frees the spider
+    var carry = new SpiderCarry();
+    Vec2? placedAt = null;
+    carry.Placed += pt => placedAt = pt;
+    carry.Start(new Vec2(300, 300), new Vec2(800, 300));
+    Check("tap drops the item where it is", carry.Drop() && !carry.Busy && placedAt is not null && !carry.Drop());
 }
 
 void RunCarryChecks()

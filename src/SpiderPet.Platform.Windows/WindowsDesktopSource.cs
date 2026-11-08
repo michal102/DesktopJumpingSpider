@@ -18,7 +18,7 @@ namespace SpiderPet.Platform.Windows;
 /// Desktop icons come from <see cref="DesktopIconReader"/>.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsDesktopSource : IDesktopSource, IDisposable
+public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, IDisposable
 {
     private static readonly HashSet<string> IgnoredClasses = new(StringComparer.Ordinal)
     {
@@ -60,6 +60,18 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDisposable
     public IntPtr IgnoredWindow { get; set; }
 
     public void Dispose() => _iconReader.Dispose();
+
+    // ---- IDesktopIconControl (physical screen pixels)
+
+    public int FindIcon(IReadOnlyList<string> displayNames) => _iconReader.FindIcon(displayNames);
+
+    public bool MoveIcon(int index, Vec2 center)
+    {
+        bool moved = _iconReader.MoveIcon(index, center.X, center.Y);
+        if (moved)
+            _lastIconScan = double.NegativeInfinity; // re-read the icons on the next snapshot
+        return moved;
+    }
 
     public DesktopSnapshot GetSnapshot()
     {

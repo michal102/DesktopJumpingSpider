@@ -8,7 +8,7 @@ namespace SpiderPet.Sandbox;
 /// the spider lives in. The overlay updates <see cref="OriginX"/>, <see cref="OriginY"/> and
 /// <see cref="Scale"/> whenever it moves or the display scaling changes.
 /// </summary>
-public sealed class OverlayDesktopSource : IDesktopSource
+public sealed class OverlayDesktopSource : IDesktopSource, IDesktopIconControl
 {
     private readonly IDesktopSource _inner;
 
@@ -27,6 +27,20 @@ public sealed class OverlayDesktopSource : IDesktopSource
 
     /// <summary>Physical pixels per device-independent pixel (Avalonia's RenderScaling).</summary>
     public double Scale { get; set; } = 1.0;
+
+    // ---- IDesktopIconControl: same conversion, the other way round
+
+    public int FindIcon(IReadOnlyList<string> displayNames) =>
+        _inner is IDesktopIconControl control ? control.FindIcon(displayNames) : -1;
+
+    public bool MoveIcon(int index, Vec2 center)
+    {
+        if (_inner is not IDesktopIconControl control)
+            return false;
+
+        double scale = Scale > 0.0 ? Scale : 1.0;
+        return control.MoveIcon(index, new Vec2(center.X * scale + OriginX, center.Y * scale + OriginY));
+    }
 
     public DesktopSnapshot GetSnapshot()
     {

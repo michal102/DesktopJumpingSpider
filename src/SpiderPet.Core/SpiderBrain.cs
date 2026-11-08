@@ -1,6 +1,6 @@
 namespace SpiderPet.Core;
 
-/// <summary>What the spider is currently paying attention to.</summary>
+/// <summary>What the spider is currently paying attention to (the "looking" part of its state).</summary>
 public enum FocusKind
 {
     /// <summary>The mouse cursor (the default).</summary>
@@ -14,15 +14,51 @@ public enum FocusKind
 }
 
 /// <summary>
-/// The spider's decision layer. For now it only decides <b>where to look</b>, in this order of priority:
+/// What the spider is doing right now. Exactly one state is active at any time; the order below is also the
+/// priority order (first = strongest). A state can only be taken over by one that is listed above it.
+/// </summary>
+public enum SpiderState
+{
+    /// <summary>The user holds the spider in the mouse. Overrides everything.</summary>
+    Held,
+    /// <summary>It was handed something and is carrying it (or setting it down). Overrides everything below.</summary>
+    Carrying,
+    /// <summary>An item is being dragged over the spider: it turns to it and reaches for it with its front legs.</summary>
+    Reaching,
+    /// <summary>It was just made to let go of an item (tap) and looks at what it dropped, for a moment.</summary>
+    Dropping,
+    /// <summary>Something suddenly changed on the desktop (window opened/closed, icon moved): it stares at it.</summary>
+    Startled,
+    /// <summary>A desktop icon is very close: it looks at it.</summary>
+    LookingAtIcon,
+    /// <summary>A window is very close: it looks at it.</summary>
+    LookingAtWindow,
+    /// <summary>The default: it watches the mouse cursor.</summary>
+    Watching,
+}
+
+/// <summary>What the host tells the brain about things the brain cannot see itself. Pass one every frame.</summary>
+/// <param name="Held">The user is holding the spider with the mouse.</param>
+/// <param name="Carrying">The carry task is busy (<see cref="SpiderCarry.Busy"/>).</param>
+/// <param name="HoverPoint">Where an item that is dragged over the spider currently is, or null when there is none.</param>
+public readonly record struct BrainContext(bool Held = false, bool Carrying = false, Vec2? HoverPoint = null);
+
+/// <summary>
+/// The spider's decision layer, a small state machine (<see cref="SpiderState"/>).
 ///
-///  1. a sudden change (window opened / closed, desktop icon moved or added) - attention for
-///     <see cref="ChangeSeconds"/>, wherever on the screen it happened;
-///  2. whatever is closest and near enough: a desktop icon (only while the spider stands on the bare desktop)
-///     or a window the spider is not standing on;
-///  3. the cursor.
+/// Every frame <see cref="Think"/> chooses the one state that wins by priority:
 ///
-/// Call <see cref="Update"/> once per frame and assign the result to <see cref="Spider.LookTarget"/>.
+///  1. <see cref="SpiderState.Held"/> (mouse holds it)
+///  2. <see cref="SpiderState.Carrying"/> (the carry task owns movement and looking)
+///  3. <see cref="SpiderState.Reaching"/> (an item hovers over it)
+///  4. <see cref="SpiderState.Dropping"/> (it was just told to let go)
+///  5. <see cref="SpiderState.Startled"/> (a sudden change, for <see cref="ChangeSeconds"/>)
+///  6. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
+///  7. <see cref="SpiderState.Watching"/> (the cursor)
+///
+/// and returns where it should look, or null when something else (the mouse, the carry task) is in control.
+/// Entering a state raises <see cref="StateChanged"/>. States never need to know about each other: only this
+/// priority list decides who overrides whom.
 /// </summary>
 public sealed class SpiderBrain
 {
@@ -41,6 +77,12 @@ public sealed class SpiderBrain
     private Change? _change;
     private double _changeLeft;
 
+    private double _dropLeft;
+    private Vec2 _dropAt;
+    
+    private int _ownIcon = -1;      // an icon the spider itself is moving: that is no surprise
+    private double _ownIconLeft;
+
     // ------------------------------------------------------------------ tuning
 
     /// <summary>An icon this close (in spider body units, see <see cref="Spider.PixelsPerUnit"/>) catches the spider's attention.</summary>
@@ -58,6 +100,9 @@ public sealed class SpiderBrain
     /// <summary>How long a sudden change keeps the spider's attention, in seconds.</summary>
     public double ChangeSeconds { get; set; } = 1.0;
 
+    /// <summary>How long the spider stares at an item it was just made to drop, in seconds.</summary>
+    public double DropSeconds { get; set; } = 0.7;
+
     /// <summary>An icon that moved at least this many pixels counts as "moved".</summary>
     public double IconMoveThreshold { get; set; } = 4.0;
 
@@ -65,7 +110,19 @@ public sealed class SpiderBrain
     public bool LookAtWindows { get; set; } = true;
     public bool ReactToChanges { get; set; } = true;
 
-    // ------------------------------------------------------------------ state, for debug drawing and the HUD
+    // ------------------------------------------------------------------ state, for the renderer and the HUD
+
+    /// <summary>The current state.</summary>
+    public SpiderState State { get; private set; } = SpiderState.Watching;
+
+    /// <summary>Seconds spent in the current state.</summary>
+    public double TimeInState { get; private set; }
+
+    /// <summary>Raised when the state changes: (old, new).</summary>
+    public event Action<SpiderState, SpiderState>? StateChanged;
+
+    /// <summary>Where the front legs should reach to (hand this to <see cref="Spider.ReachTarget"/>), or null.</summary>
+    public Vec2? ReachPoint { get; private set; }
 
     /// <summary>The icon the spider is currently looking at because it is near, or null.</summary>
     public DesktopIcon? Attention { get; private set; }
@@ -76,17 +133,28 @@ public sealed class SpiderBrain
     /// <summary>True when no window covers the spider, i.e. it is standing on the desktop.</summary>
     public bool OnDesktop { get; private set; }
 
-    public FocusKind Focus { get; private set; }
+    /// <summary>The looking part of the state, for the debug drawing.</summary>
+    public FocusKind Focus => State switch
+    {
+        SpiderState.LookingAtIcon => FocusKind.Icon,
+        SpiderState.LookingAtWindow => FocusKind.Window,
+        SpiderState.Startled => FocusKind.Change,
+        _ => FocusKind.Cursor,
+    };
 
     /// <summary>The point being looked at when <see cref="Focus"/> is not <see cref="FocusKind.Cursor"/>.</summary>
     public Vec2 FocusPoint { get; private set; }
 
-    /// <summary>Short description of the current focus for the HUD.</summary>
-    public string FocusLabel => Focus switch
+    /// <summary>Short description of the current state for the HUD.</summary>
+    public string FocusLabel => State switch
     {
-        FocusKind.Icon => $"icon #{Attention?.Index}",
-        FocusKind.Window => $"window \"{AttentionWindow?.Title}\"",
-        FocusKind.Change => _change?.Kind switch
+        SpiderState.Held => "held",
+        SpiderState.Carrying => "carrying something",
+        SpiderState.Reaching => "reaching for an item",
+        SpiderState.Dropping => "dropped it",
+        SpiderState.LookingAtIcon => $"icon #{Attention?.Index}",
+        SpiderState.LookingAtWindow => $"window \"{AttentionWindow?.Title}\"",
+        SpiderState.Startled => _change?.Kind switch
         {
             ChangeKind.WindowOpened => "change: window opened",
             ChangeKind.WindowClosed => "change: window closed",
@@ -97,11 +165,33 @@ public sealed class SpiderBrain
         _ => "cursor",
     };
 
+    // ------------------------------------------------------------------ events from the host
+    public void IgnoreIconMove(int index, double seconds = 1.5)
+    {
+        _ownIcon = index;
+        _ownIconLeft = seconds;
+    }
+    
+
+    /// <summary>The spider was just made to let go of something at <paramref name="at"/>: it looks at it for <see cref="DropSeconds"/>.</summary>
+    public void NotifyDropped(Vec2 at)
+    {
+        _dropAt = at;
+        _dropLeft = DropSeconds;
+    }
+
     // ------------------------------------------------------------------ per frame
 
-    /// <summary>Returns the point the spider should look at.</summary>
+    /// <summary>Convenience for hosts without held / carried / dragged items: always returns a point to look at.</summary>
+    public Vec2 Update(double dt, Spider spider, DesktopSnapshot snapshot) =>
+        Think(dt, spider, snapshot, default) ?? snapshot.Cursor;
+
+    /// <summary>
+    /// Picks the state for this frame and returns the point the spider should look at, or null when the state
+    /// leaves looking to somebody else (<see cref="SpiderState.Held"/>, <see cref="SpiderState.Carrying"/>).
+    /// </summary>
     /// <param name="dt">Seconds since the previous call.</param>
-    public Vec2 Update(double dt, Spider spider, DesktopSnapshot snapshot)
+    public Vec2? Think(double dt, Spider spider, DesktopSnapshot snapshot, BrainContext ctx)
     {
         Vec2 pos = spider.Position;
         double ppu = spider.PixelsPerUnit;
@@ -118,61 +208,102 @@ public sealed class SpiderBrain
             }
         }
 
-        // 1) sudden change
         bool changeActive = _changeLeft > 0.0;
         if (changeActive)
             _changeLeft -= dt;
 
-        if (changeActive && ReactToChanges && _change is not null)
+        if (_ownIconLeft > 0.0)
+            _ownIconLeft -= dt;
+        
+        bool dropActive = _dropLeft > 0.0;
+        if (dropActive)
+            _dropLeft -= dt;
+
+        // ---- the priority list: the first state that applies wins
+        SpiderState next;
+        Vec2? look = null;
+        Vec2? reach = null;
+
+        if (ctx.Held)
         {
-            Vec2 target = ChangeTarget(_change, snapshot);
-            if ((target - pos).Length >= MinDistance)
+            next = SpiderState.Held;
+        }
+        else if (ctx.Carrying)
+        {
+            next = SpiderState.Carrying;
+        }
+        else if (ctx.HoverPoint is Vec2 hover)
+        {
+            next = SpiderState.Reaching;
+            look = hover;
+            reach = hover;
+        }
+        else if (dropActive && (_dropAt - pos).Length >= MinDistance)
+        {
+            next = SpiderState.Dropping;
+            look = _dropAt;
+        }
+        else if (changeActive && ReactToChanges && _change is not null && (ChangeTarget(_change, snapshot) - pos).Length >= MinDistance)
+        {
+            next = SpiderState.Startled;
+            look = ChangeTarget(_change, snapshot);
+        }
+        else
+        {
+            // nearest of: icon (desktop only), window (any)
+            DesktopIcon? icon = LookAtIcons && OnDesktop ? NearestIcon(pos, ppu, snapshot.Icons) : null;
+            double iconD = icon is null ? double.MaxValue : (icon.Center - pos).Length;
+
+            DesktopWindow? window = LookAtWindows ? NearestWindow(pos, ppu, snapshot.Windows) : null;
+            double windowD = double.MaxValue;
+            Vec2 windowTarget = default;
+            if (window is not null)
             {
-                Attention = null;
+                windowTarget = ClosestPoint(window.Bounds, pos);
+                windowD = (windowTarget - pos).Length;
+            }
+
+            if (icon is not null && iconD <= windowD)
+            {
+                next = SpiderState.LookingAtIcon;
+                Attention = icon;
                 AttentionWindow = null;
-                Focus = FocusKind.Change;
-                FocusPoint = target;
-                return target;
+                look = icon.Center;
+            }
+            else if (window is not null)
+            {
+                next = SpiderState.LookingAtWindow;
+                Attention = null;
+                AttentionWindow = window;
+                look = windowTarget;
+            }
+            else
+            {
+                next = SpiderState.Watching;
+                look = snapshot.Cursor;
             }
         }
 
-        // 2) nearest of: icon (desktop only), window (any)
-        DesktopIcon? icon = LookAtIcons && OnDesktop ? NearestIcon(pos, ppu, snapshot.Icons) : null;
-        double iconD = icon is null ? double.MaxValue : (icon.Center - pos).Length;
+        // the "near" targets keep their hysteresis memory only while they are the active state
+        if (next != SpiderState.LookingAtIcon) Attention = null;
+        if (next != SpiderState.LookingAtWindow) AttentionWindow = null;
 
-        DesktopWindow? window = LookAtWindows ? NearestWindow(pos, ppu, snapshot.Windows) : null;
-        double windowD = double.MaxValue;
-        Vec2 windowTarget = default;
-        if (window is not null)
-        {
-            windowTarget = ClosestPoint(window.Bounds, pos);
-            windowD = (windowTarget - pos).Length;
-        }
+        Enter(next);
+        TimeInState += dt;
 
-        if (icon is not null && iconD <= windowD)
-        {
-            Attention = icon;
-            AttentionWindow = null;
-            Focus = FocusKind.Icon;
-            FocusPoint = icon.Center;
-            return icon.Center;
-        }
+        ReachPoint = reach;
+        if (look is Vec2 l)
+            FocusPoint = l;
+        return look;
+    }
 
-        if (window is not null)
-        {
-            Attention = null;
-            AttentionWindow = window;
-            Focus = FocusKind.Window;
-            FocusPoint = windowTarget;
-            return windowTarget;
-        }
-
-        // 3) default
-        Attention = null;
-        AttentionWindow = null;
-        Focus = FocusKind.Cursor;
-        FocusPoint = snapshot.Cursor;
-        return snapshot.Cursor;
+    private void Enter(SpiderState next)
+    {
+        if (next == State) return;
+        SpiderState old = State;
+        State = next;
+        TimeInState = 0.0;
+        StateChanged?.Invoke(old, next);
     }
 
     // ------------------------------------------------------------------ nearby things
@@ -308,6 +439,9 @@ public sealed class SpiderBrain
 
                 foreach (DesktopIcon icon in icons)
                 {
+                    if (icon.Index == _ownIcon && _ownIconLeft > 0.0)
+                        continue;   // the spider moved this one itself
+                    
                     bool isNew = !_iconsPrev.TryGetValue(icon.Index, out Vec2 old);
                     if (!isNew && (icon.Center - old).Length < IconMoveThreshold)
                         continue;

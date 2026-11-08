@@ -130,6 +130,7 @@ public sealed class OverlayWindow : Window
         Content = root;
 
         _view.UseOverlayDesktop(_source);
+        _view.IconControl = _source;
         _view.BeforeUpdate += OnBeforeUpdate;
         _view.Frame += OnFrame;
         _view.SpiderMenuRequested += ShowMenu;
@@ -208,7 +209,9 @@ public sealed class OverlayWindow : Window
         if (_hwnd == IntPtr.Zero || _solid) return;
 
         // Uses the cursor from the previous poll, which is at most one frame old.
-        bool wantSolid = _menuOpen || _view.IsDragging || _view.IsOverSpider(_view.Watcher.Current.Cursor);
+        // while the spider carries something the overlay also catches clicks, so a double click can tell it where to put the item
+        bool wantSolid = _menuOpen || _view.IsDragging || _view.Carry.Busy
+                         || _view.IsOverSpider(_view.Watcher.Current.Cursor);
         bool wantClickThrough = !wantSolid;
         if (wantClickThrough != _clickThrough)
         {
@@ -270,7 +273,9 @@ public sealed class OverlayWindow : Window
         _view.Brain.LookAtIcons = _settings.LookAtIcons;
         _view.Brain.LookAtWindows = _settings.LookAtWindows;
         _view.Brain.ReactToChanges = _settings.ReactToChanges;
-        _view.CarryToCursor = _settings.CarryToCursor;
+        _view.DropStyle = _settings.DropStyle;
+        _view.HoardCorner = _settings.HoardCorner;
+        _view.Spider.SteppedTurning = _settings.SteppedTurning;
         _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons;
         
         if (_spiderItem is not null) _spiderItem.Header = SpiderHeader();
@@ -297,7 +302,7 @@ public sealed class OverlayWindow : Window
             $"windows tracked: {_view.Watcher.Current.Windows.Count}   standing on: {_view.Perch?.Title ?? "-"}\n" +
             $"last event: {_view.LastEvent}\n" +
             $"on desktop: {(_view.Brain.OnDesktop ? "yes" : "no")}   icons: {_view.Watcher.Current.Icons?.Count ?? 0}   looking at: {_view.Brain.FocusLabel}\n" +
-            $"carrying: {_view.Carry.Phase}   (drop a file onto the spider)\n" +
+            $"carrying: {_view.Carry.Phase}   (drop a file onto it; double-click to redirect)\n" +
             $"pilot: {(_settings.PilotMode ? "ON" : "off")} (Ctrl+Alt+F8)   outlines (Ctrl+Alt+F9)   quit (Ctrl+Alt+F12)\n" +
             "right-click the spider for its menu";
     }
@@ -406,7 +411,7 @@ public sealed class OverlayWindow : Window
 
         _tray = new TrayIcon
         {
-            Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://SpiderPet.Sandbox/Assets/app-icon.ico"))),
+            Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://SpiderPet.Sandbox/Assets/spider.ico"))),
             ToolTipText = "Desktop spider",
             IsVisible = true,
             Menu = new NativeMenu

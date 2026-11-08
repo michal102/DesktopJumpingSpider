@@ -8,20 +8,29 @@ public enum CarryPhase
     Grab,
     /// <summary>The spider walks to the destination with the item in its mandibles.</summary>
     Carry,
-    /// <summary>The spider sets the item down.</summary>
+    /// <summary>The spider sets the item down (or flicks it away, when it disapproves).</summary>
     Place,
     /// <summary>The item lies on the ground for a few seconds, then fades away.</summary>
     Rest,
 }
 
+/// <summary>The spider's own corner of the screen, where it keeps the things it likes.</summary>
+public enum SpiderCorner { TopRight, TopLeft, BottomRight, BottomLeft }
+
+/// <summary>How a carry should go.</summary>
+/// <param name="Disdain">The spider holds the item at arm's length and flicks it away at the end.</param>
+/// <param name="Quip">What the spider says.</param>
+/// <param name="BringToCursor">Gift mode: follow the mouse cursor and set the item down next to it.</param>
+public readonly record struct CarryOptions(bool Disdain = false, string Quip = "", bool BringToCursor = false);
+
 /// <summary>
 /// "Something was dropped on the spider": it grabs the item, carries it to a destination and sets it down.
-/// Purely a visual game - the item is a ghost, nothing on disk is touched.
 ///
 /// While <see cref="Busy"/> this class takes over the spider's <see cref="Spider.MoveInput"/> and
 /// <see cref="Spider.LookTarget"/>, so call <see cref="Update"/> after the normal input handling and before
 /// <see cref="Spider.Update"/>. The renderer reads <see cref="ItemPosition"/>, <see cref="ItemAngleDeg"/>,
 /// <see cref="ItemScale"/> and <see cref="ItemAlpha"/> whenever <see cref="HasItem"/> is true.
+/// <see cref="Placed"/> fires when the item touches the ground, which is the moment to move the real thing.
 /// </summary>
 public sealed class SpiderCarry
 {
@@ -29,24 +38,41 @@ public sealed class SpiderCarry
     private Vec2 _destination;
     private Vec2 _ground;
     private Vec2 _placeFrom;
+    private double _placeAngle;
     private double _t;
+    private bool _disdain;
+    private bool _bringToCursor;
+    private bool _cursorLeft;
+    private double _quipLeft;
 
     public double GrabSeconds { get; set; } = 0.35;
     public double PlaceSeconds { get; set; } = 0.45;
     public double RestSeconds { get; set; } = 6.0;
     public double FadeSeconds { get; set; } = 1.0;
 
-    /// <summary>Walking stops within this many pixels of the destination.</summary>
+    /// <summary>Walking stops when the body is within this many pixels of the destination (or the held item is within 10).</summary>
     public double ArriveDistance { get; set; } = 14.0;
 
     /// <summary>Give up and set the item down wherever the spider is after this many seconds.</summary>
     public double MaxCarrySeconds { get; set; } = 12.0;
+
+    /// <summary>Gift mode: how long the spider waits holding the item for the mouse to leave before it gives up.</summary>
+    public double WaitForCursorSeconds { get; set; } = 6.0;
+
+    /// <summary>Gift mode: the mouse must get this far (px) from where the item was dropped before the spider sets off.</summary>
+    public double CursorLeaveDistance { get; set; } = 160.0;
+
+    /// <summary>Gift mode: the spider stops this many pixels short of the cursor.</summary>
+    public double GiftGap { get; set; } = 64.0;
 
     /// <summary>How far in front of the body centre the item is held, in body units.</summary>
     public double MouthUnits { get; set; } = 6.5;
 
     /// <summary>Walking speed while carrying, as a fraction of the spider's speed.</summary>
     public double CarryPace { get; set; } = 0.8;
+
+    /// <summary>How far a disapproved item is flicked past the destination, in px.</summary>
+    public double FlickDistance { get; set; } = 70.0;
 
     public CarryPhase Phase { get; private set; }
 
@@ -56,23 +82,53 @@ public sealed class SpiderCarry
     /// <summary>True while there is an item to draw.</summary>
     public bool HasItem => Phase != CarryPhase.Idle;
 
+    /// <summary>True once the user pointed at a spot with a double click; the item is then set down exactly there.</summary>
+    public bool Pinned { get; private set; }
+
     public Vec2 Destination => _destination;
     public Vec2 ItemPosition { get; private set; }
     public double ItemAngleDeg { get; private set; }
     public double ItemScale { get; private set; } = 1.0;
     public double ItemAlpha { get; private set; } = 1.0;
 
+    /// <summary>What the spider is saying right now (empty when silent).</summary>
+    public string Quip => _quipLeft > 0.0 ? _quip : "";
+    private string _quip = "";
+
+    /// <summary>Raised when the item reaches the ground. The argument is where it was put down.</summary>
+    public event Action<Vec2>? Placed;
+
     /// <summary>Starts carrying an item that was dropped at <paramref name="dropPoint"/> to <paramref name="destination"/>. Replaces any earlier item.</summary>
-    public void Start(Vec2 dropPoint, Vec2 destination)
+    public void Start(Vec2 dropPoint, Vec2 destination, CarryOptions options = default)
     {
         _drop = dropPoint;
         _destination = destination;
+        _ground = destination;
+        _disdain = options.Disdain;
+        _bringToCursor = options.BringToCursor;
+        _cursorLeft = false;
+        _quip = options.Quip ?? "";
+        _quipLeft = _quip.Length > 0 ? 3.2 : 0.0;
+        Pinned = false;
         _t = 0.0;
         Phase = CarryPhase.Grab;
         ItemPosition = dropPoint;
         ItemAngleDeg = 0.0;
         ItemScale = 1.0;
         ItemAlpha = 1.0;
+    }
+
+    /// <summary>The user pointed at a spot: take the item exactly there instead. Only works before the item is set down.</summary>
+    public bool Redirect(Vec2 destination)
+    {
+        if (Phase is not (CarryPhase.Grab or CarryPhase.Carry)) return false;
+        _destination = destination;
+        _ground = destination;
+        _bringToCursor = false;
+        _disdain = false;
+        Pinned = true;
+        _t = 0.0;
+        return true;
     }
 
     /// <summary>The user picked the spider up: put the item down where it is.</summary>
@@ -82,10 +138,37 @@ public sealed class SpiderCarry
         _ground = ItemPosition;
         _t = 0.0;
         Phase = CarryPhase.Rest;
+        Placed?.Invoke(_ground);   // the item is on the ground now, so a real desktop icon moves there too
     }
 
-    public void Update(double dt, Spider spider)
+    /// <summary>The user tapped the spider while it holds something: it lets go right where it stands. False if it held nothing.</summary>
+    public bool Drop()
     {
+        if (!Busy) return false;
+        Cancel();
+        return true;
+    }
+
+    /// <summary>Makes the spider say something for a moment.</summary>
+    public void Say(string text, double seconds = 2.2)
+    {
+        _quip = text ?? "";
+        _quipLeft = _quip.Length > 0 ? seconds : 0.0;
+    }
+
+    /// <summary>The item has been turned into something real (an icon was moved): stop drawing the ghost.</summary>
+    public void EndItem()
+    {
+        Phase = CarryPhase.Idle;
+        ItemAlpha = 0.0;
+    }
+
+    /// <param name="cursor">Needed for gift mode; may be null otherwise.</param>
+    public void Update(double dt, Spider spider, Vec2? cursor = null)
+    {
+        if (_quipLeft > 0.0)
+            _quipLeft -= dt;
+
         switch (Phase)
         {
             case CarryPhase.Idle:
@@ -110,24 +193,44 @@ public sealed class SpiderCarry
             case CarryPhase.Carry:
             {
                 _t += dt;
+                double limit = _bringToCursor ? MaxCarrySeconds + WaitForCursorSeconds : MaxCarrySeconds;
+
+                if (_bringToCursor && cursor is Vec2 c)
+                {
+                    if ((c - _drop).Length > CursorLeaveDistance)
+                        _cursorLeft = true;
+
+                    if (!_cursorLeft)
+                    {
+                        // The mouse is still on top of the spider (that is where the item was dropped):
+                        // stand there holding it until the user moves away.
+                        spider.MoveInput = Vec2.Zero;
+                        spider.LookTarget = c;
+                        ItemPosition = Mouth(spider);
+                        ItemAngleDeg = spider.HeadingDeg + Sway(_t);
+                        if (_t >= WaitForCursorSeconds)
+                            BeginPlace(spider, Mouth(spider));
+                        return;
+                    }
+
+                    Vec2 away = (spider.Position - c).Normalized();
+                    _destination = c + away * GiftGap;
+                    _ground = _destination;
+                }
+
                 Vec2 to = _destination - spider.Position;
                 double distance = to.Length;
-                if (distance <= ArriveDistance || _t >= MaxCarrySeconds)
+                double mouthDistance = (_destination - Mouth(spider)).Length;
+                if (distance <= ArriveDistance || mouthDistance <= 10.0 || _t >= limit)
                 {
-                    _placeFrom = Mouth(spider);
-                    _ground = spider.Position + Forward(spider) * ((MouthUnits + 4.0) * spider.PixelsPerUnit);
-                    Phase = CarryPhase.Place;
-                    _t = 0.0;
-                    spider.MoveInput = Vec2.Zero;
-                    spider.LookTarget = _ground;
+                    BeginPlace(spider, _t >= limit ? Mouth(spider) : _destination);
                     return;
                 }
 
                 spider.MoveInput = to * (CarryPace / distance);
                 spider.LookTarget = _destination;
                 ItemPosition = Mouth(spider);
-                // the item sways a little as it is dragged along
-                ItemAngleDeg = spider.HeadingDeg + 7.0 * Math.Sin(_t * 10.0);
+                ItemAngleDeg = spider.HeadingDeg + Sway(_t);
                 return;
             }
 
@@ -138,10 +241,13 @@ public sealed class SpiderCarry
                 spider.MoveInput = Vec2.Zero;
                 spider.LookTarget = _ground;
                 ItemPosition = _placeFrom.Lerp(_ground, k);
+                if (_disdain)
+                    ItemAngleDeg = _placeAngle + 540.0 * k;   // flicked away, spinning
                 if (_t >= PlaceSeconds)
                 {
                     Phase = CarryPhase.Rest;
                     _t = 0.0;
+                    Placed?.Invoke(_ground);
                 }
                 return;
             }
@@ -162,12 +268,27 @@ public sealed class SpiderCarry
         }
     }
 
+    private void BeginPlace(Spider spider, Vec2 where)
+    {
+        _placeFrom = Mouth(spider);
+        _placeAngle = ItemAngleDeg;
+        _ground = _disdain && !Pinned ? where + Forward(spider) * FlickDistance : where;
+        Phase = CarryPhase.Place;
+        _t = 0.0;
+        spider.MoveInput = Vec2.Zero;
+        spider.LookTarget = _ground;
+    }
+
+    // An item held in disgust swings wider and faster.
+    private double Sway(double t) => _disdain ? 16.0 * Math.Sin(t * 14.0) : 7.0 * Math.Sin(t * 10.0);
+
+    // ------------------------------------------------------------------ choosing where to go
+
     /// <summary>
     /// Picks where to take the item. Candidates are tried in order and the first "good" one wins: inside
     /// <paramref name="area"/>, on the same surface as the spider (bare desktop or the same window), and not on top
     /// of a desktop icon. If none is good, the last candidate is used.
     /// </summary>
-    /// <param name="towardCursor">Gift mode: aim near the mouse cursor instead of near the spider.</param>
     public static Vec2 PickDestination(Spider spider, DesktopSnapshot snapshot, RectD area, Random rng, bool towardCursor)
     {
         const double margin = 60.0;
@@ -180,8 +301,8 @@ public sealed class SpiderCarry
         {
             double angle = rng.NextDouble() * Math.PI * 2.0;
             double radius = towardCursor
-                ? (22.0 + rng.NextDouble() * 12.0) * ppu     // just beside the cursor
-                : (50.0 + rng.NextDouble() * 60.0) * ppu;    // a short walk away
+                ? (22.0 + rng.NextDouble() * 12.0) * ppu
+                : (50.0 + rng.NextDouble() * 60.0) * ppu;
 
             candidate = new Vec2(
                 Math.Clamp(centre.X + Math.Cos(angle) * radius, area.X + margin, Math.Max(area.X + margin, area.Right - margin)),
@@ -195,6 +316,73 @@ public sealed class SpiderCarry
         }
 
         return candidate;
+    }
+
+    /// <summary>The corner diagonally across from <paramref name="corner"/>: where rubbish is dumped.</summary>
+    public static SpiderCorner Opposite(SpiderCorner corner) => corner switch
+    {
+        SpiderCorner.TopRight => SpiderCorner.BottomLeft,
+        SpiderCorner.TopLeft => SpiderCorner.BottomRight,
+        SpiderCorner.BottomRight => SpiderCorner.TopLeft,
+        _ => SpiderCorner.TopRight,
+    };
+
+    /// <summary>
+    /// The first free spot (icon centre) in <paramref name="corner"/>: spots are laid out like desktop icons, a column
+    /// at a time starting at the corner, and a spot is free when no existing icon sits in its grid cell.
+    /// <paramref name="ignoreIndex"/> is the icon being moved (it must not block its own new home).
+    /// </summary>
+    public static Vec2 FindCornerSlot(RectD area, SpiderCorner corner, IReadOnlyList<DesktopIcon>? icons, int ignoreIndex)
+    {
+        double iw = 48.0, ih = 48.0;
+        if (icons is { Count: > 0 })
+        {
+            iw = 0.0; ih = 0.0;
+            foreach (DesktopIcon icon in icons) { iw += icon.Bounds.Width; ih += icon.Bounds.Height; }
+            iw /= icons.Count; ih /= icons.Count;
+        }
+
+        double cellW = Math.Max(76.0, iw * 1.7);
+        double cellH = Math.Max(88.0, ih * 2.0);
+        bool right = corner is SpiderCorner.TopRight or SpiderCorner.BottomRight;
+        bool bottom = corner is SpiderCorner.BottomLeft or SpiderCorner.BottomRight;
+
+        double marginX = cellW * 0.55;
+        double marginTop = cellH * 0.5;
+        double marginBottom = cellH * 0.5 + 56.0;   // keep clear of the taskbar
+
+        int rows = Math.Max(1, (int)((area.Height - marginTop - marginBottom) / cellH) + 1);
+        int cols = Math.Max(1, (int)((area.Width - 2 * marginX) / cellW) + 1);
+
+        Vec2 first = default;
+        for (int k = 0; k < rows * cols; k++)
+        {
+            int col = k / rows, row = k % rows;
+            var slot = new Vec2(
+                right ? area.Right - marginX - col * cellW : area.X + marginX + col * cellW,
+                bottom ? area.Bottom - marginBottom - row * cellH : area.Y + marginTop + row * cellH);
+            if (k == 0) first = slot;
+
+            bool occupied = false;
+            if (icons is not null)
+            {
+                foreach (DesktopIcon icon in icons)
+                {
+                    if (icon.Index == ignoreIndex) continue;
+                    Vec2 c = icon.Center;
+                    if (Math.Abs(c.X - slot.X) < cellW * 0.5 && Math.Abs(c.Y - slot.Y) < cellH * 0.5)
+                    {
+                        occupied = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!occupied)
+                return slot;
+        }
+
+        return first;
     }
 
     // ------------------------------------------------------------------ helpers
@@ -223,7 +411,7 @@ public sealed class SpiderCarry
     }
 
     private Vec2 Mouth(Spider spider) =>
-        spider.Position + Forward(spider) * (MouthUnits * spider.PixelsPerUnit);
+        spider.Position + Forward(spider) * ((MouthUnits + (_disdain ? 2.5 : 0.0)) * spider.PixelsPerUnit);
 
     private static double Smooth(double x)
     {

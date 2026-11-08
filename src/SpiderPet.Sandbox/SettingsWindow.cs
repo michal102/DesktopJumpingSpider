@@ -1,46 +1,92 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
+using SpiderPet.Core;
 
 namespace SpiderPet.Sandbox;
 
-/// <summary>Regular window with every toggle of <see cref="AppSettings"/> plus a quit button.</summary>
+/// <summary>
+/// Settings in tabs (Behavior, Drops, Display), each scrollable, plus Close and Quit buttons that are always visible.
+/// Follows the system theme and uses the Windows Mica/acrylic backdrop where available.
+/// </summary>
 public sealed class SettingsWindow : Window
 {
     private readonly AppSettings _settings;
-    private readonly CheckBox _outlines = new() { Content = "Show window outlines (Ctrl+Alt+F9)" };
-    private readonly CheckBox _info = new() { Content = "Show info panel" };
-    private readonly CheckBox _glow = new() { Content = "Light glow under the spider" };
-    private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
-    private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200, Width = 300 };
-    private readonly TextBlock _speedLabel = new();
     private bool _updating;
-    private readonly CheckBox _spider = new() { Content = "Show spider (Ctrl+Alt+F10)" };
-    private readonly CheckBox _iconMarks = new() { Content = "Mark desktop icons" };
+
+    // Behavior
     private readonly CheckBox _lookIcons = new() { Content = "Look at nearby desktop icons" };
     private readonly CheckBox _lookWindows = new() { Content = "Look at nearby windows" };
-    private readonly CheckBox _carryGift = new() { Content = "Bring dropped items to the cursor (instead of nearby)" };
     private readonly CheckBox _reactChanges = new() { Content = "React to sudden changes (new window, moved icon)" };
+    private readonly CheckBox _stepped = new() { Content = "Stepped turning (big turns are split into a few steps)" };
+    private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
+    private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200 };
+    private readonly TextBlock _speedLabel = new();
+
+    // Drops
+    private readonly ComboBox _dropStyle = new()
+    {
+        ItemsSource = new[]
+        {
+            "Lay it down nearby",
+            "Tuck it away in my corner",
+            "Bring it to the mouse cursor",
+        },
+    };
+    private readonly ComboBox _corner = new()
+    {
+        ItemsSource = new[] { "Top right", "Top left", "Bottom right", "Bottom left" },
+    };
+
+    // Display
+    private readonly CheckBox _spider = new() { Content = "Show spider (Ctrl+Alt+F10)" };
+    private readonly CheckBox _glow = new() { Content = "Soft rim light around the spider (for dark backgrounds)" };
+    private readonly CheckBox _outlines = new() { Content = "Show window outlines (Ctrl+Alt+F9)" };
+    private readonly CheckBox _iconMarks = new() { Content = "Mark desktop icons" };
+    private readonly CheckBox _info = new() { Content = "Show info panel" };
 
     public SettingsWindow(AppSettings settings, Action quit)
     {
         _settings = settings;
 
         Title = "Spider settings";
-        Width = 380;
-        SizeToContent = SizeToContent.Height;
-        CanResize = false;
+        Width = 440;
+        Height = 520;
+        MinWidth = 380;
+        MinHeight = 360;
         Topmost = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://SpiderPet.Sandbox/Assets/app-icon.ico")));
+        Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://SpiderPet.Sandbox/Assets/spider.ico")));
         Background = Brushes.Transparent;
         TransparencyLevelHint = new[]
         {
             WindowTransparencyLevel.Mica,        // Windows 11
             WindowTransparencyLevel.AcrylicBlur, // fallback
             WindowTransparencyLevel.Blur,
+        };
+
+        AddPage("Behavior", _lookIcons, _lookWindows, _reactChanges, _stepped, _pilot,
+            Label("Walking speed"), _speed, _speedLabel);
+        AddPage("Drops", Note("What happens when you drop a file onto the spider:"),
+            _dropStyle,
+            Label("The spider's own corner"), _corner,
+            Note("Files it dislikes (Microsoft slop, temp files...) are always dumped in the opposite corner. " +
+                 "While it is carrying something, double-click anywhere to make it put the item exactly there, " +
+                 "or tap the spider to make it drop the item on the spot. " +
+                 "Dropped desktop icons are really moved on your desktop (not with Auto arrange icons on)."));
+        AddPage("Display", _spider, _glow, _outlines, _iconMarks, _info);
+
+        // JetBrains-style tab strip: flat labels, an accent underline under the selected one, a hairline below the strip.
+        var strip = new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(48, 128, 128, 128)),
+            Padding = new Thickness(10, 6, 10, 0),
+            Child = _strip,
         };
 
         var close = new Button { Content = "Close" };
@@ -54,61 +100,150 @@ public sealed class SettingsWindow : Window
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 12, 0, 0),
+            Margin = new Thickness(16, 8, 16, 14),
             Children = { close, quitButton },
         };
 
-        Content = new StackPanel
-        {
-            Margin = new Thickness(18),
-            Spacing = 8,
-            Children =
-            {
-                _spider,
-                _outlines, _iconMarks, _info, _glow, _pilot, _lookIcons, _lookWindows, _reactChanges, _carryGift,
-                new TextBlock { Text = "Walking speed", Margin = new Thickness(0, 10, 0, 0) },
-                _speed, _speedLabel,
-                buttons,
-            },
-        };
+        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
+        root.Children.Add(strip);
+        Grid.SetRow(_pages, 1);
+        root.Children.Add(_pages);
+        Grid.SetRow(buttons, 2);
+        root.Children.Add(buttons);
+        SelectTab(0);
+        ActualThemeVariantChanged += (_, _) => UpdateTabs();
+        Content = root;
 
-        _outlines.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowWindowOutlines = _outlines.IsChecked == true; };
-        _info.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowInfoPanel = _info.IsChecked == true; };
-        _glow.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowGlow = _glow.IsChecked == true; };
-        _pilot.IsCheckedChanged += (_, _) => { if (!_updating) _settings.PilotMode = _pilot.IsChecked == true; };
+        Wire(_lookIcons, v => _settings.LookAtIcons = v);
+        Wire(_lookWindows, v => _settings.LookAtWindows = v);
+        Wire(_reactChanges, v => _settings.ReactToChanges = v);
+        Wire(_stepped, v => _settings.SteppedTurning = v);
+        Wire(_pilot, v => _settings.PilotMode = v);
+        Wire(_spider, v => _settings.ShowSpider = v);
+        Wire(_glow, v => _settings.ShowGlow = v);
+        Wire(_outlines, v => _settings.ShowWindowOutlines = v);
+        Wire(_iconMarks, v => _settings.ShowIconMarks = v);
+        Wire(_info, v => _settings.ShowInfoPanel = v);
+
         _speed.PropertyChanged += (_, e) =>
         {
-            if (e.Property != Slider.ValueProperty) return;
+            if (e.Property != RangeBase.ValueProperty) return;
             _speedLabel.Text = $"{_speed.Value:0} px/s";
             if (!_updating) _settings.BaseSpeed = _speed.Value;
         };
-        _iconMarks.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowIconMarks = _iconMarks.IsChecked == true; };
-        _lookIcons.IsCheckedChanged += (_, _) => { if (!_updating) _settings.LookAtIcons = _lookIcons.IsChecked == true; };
-        _lookWindows.IsCheckedChanged += (_, _) => { if (!_updating) _settings.LookAtWindows = _lookWindows.IsChecked == true; };
-        _reactChanges.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ReactToChanges = _reactChanges.IsChecked == true; };
-        _carryGift.IsCheckedChanged += (_, _) => { if (!_updating) _settings.CarryToCursor = _carryGift.IsChecked == true; };
-        _spider.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowSpider = _spider.IsChecked == true; };
+        _dropStyle.SelectionChanged += (_, _) =>
+        {
+            if (!_updating && _dropStyle.SelectedIndex >= 0) _settings.DropStyle = (DropMode)_dropStyle.SelectedIndex;
+        };
+        _corner.SelectionChanged += (_, _) =>
+        {
+            if (!_updating && _corner.SelectedIndex >= 0) _settings.HoardCorner = (SpiderCorner)_corner.SelectedIndex;
+        };
 
         _settings.Changed += Refresh;
         Closed += (_, _) => _settings.Changed -= Refresh;
         Refresh();
     }
 
+    // ------------------------------------------------------------------ layout helpers
+
+    private readonly StackPanel _strip = new() { Orientation = Orientation.Horizontal, Spacing = 2 };
+    private readonly Grid _pages = new();
+    private readonly List<(Border Header, TextBlock Text, Control Page)> _tabs = new();
+    private int _tab;
+
+    private void AddPage(string header, params Control[] children)
+    {
+        var stack = new StackPanel { Spacing = 10, Margin = new Thickness(18, 14, 18, 14) };
+        foreach (Control child in children)
+            stack.Children.Add(child);
+
+        var page = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = stack,
+            IsVisible = false,
+        };
+        _pages.Children.Add(page);
+
+        var text = new TextBlock { Text = header, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        var tab = new Border
+        {
+            Padding = new Thickness(14, 8, 14, 7),
+            BorderThickness = new Thickness(0, 0, 0, 3),
+            BorderBrush = Brushes.Transparent,
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(6, 6, 0, 0),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = text,
+        };
+
+        int index = _tabs.Count;
+        tab.PointerPressed += (_, _) => SelectTab(index);
+        tab.PointerEntered += (_, _) => { _hover = index; UpdateTabs(); };
+        tab.PointerExited += (_, _) => { if (_hover == index) _hover = -1; UpdateTabs(); };
+
+        _tabs.Add((tab, text, page));
+        _strip.Children.Add(tab);
+    }
+
+    private int _hover = -1;
+
+    private void SelectTab(int index)
+    {
+        _tab = index;
+        UpdateTabs();
+    }
+
+    private void UpdateTabs()
+    {
+        IBrush accent = Brushes.DodgerBlue;
+        if (this.TryFindResource("SystemAccentColor", ActualThemeVariant, out object? v) && v is Color c)
+            accent = new SolidColorBrush(c);
+
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            bool selected = i == _tab;
+            _tabs[i].Page.IsVisible = selected;
+            _tabs[i].Header.BorderBrush = selected ? accent : Brushes.Transparent;
+            _tabs[i].Header.Background = !selected && i == _hover
+                ? new SolidColorBrush(Color.FromArgb(30, 128, 128, 128))
+                : Brushes.Transparent;
+            _tabs[i].Text.FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal;
+            _tabs[i].Text.Opacity = selected ? 1.0 : 0.65;
+        }
+    }
+
+    private static TextBlock Label(string text) =>
+        new() { Text = text, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) };
+
+    private static TextBlock Note(string text) =>
+        new() { Text = text, TextWrapping = TextWrapping.Wrap, Opacity = 0.75 };
+
+    private void Wire(CheckBox box, Action<bool> apply) =>
+        box.IsCheckedChanged += (_, _) =>
+        {
+            if (!_updating) apply(box.IsChecked == true);
+        };
+
     private void Refresh()
     {
         _updating = true;
-        _outlines.IsChecked = _settings.ShowWindowOutlines;
-        _iconMarks.IsChecked = _settings.ShowIconMarks;
         _lookIcons.IsChecked = _settings.LookAtIcons;
         _lookWindows.IsChecked = _settings.LookAtWindows;
         _reactChanges.IsChecked = _settings.ReactToChanges;
-        _carryGift.IsChecked = _settings.CarryToCursor;
-        _info.IsChecked = _settings.ShowInfoPanel;
-        _glow.IsChecked = _settings.ShowGlow;
+        _stepped.IsChecked = _settings.SteppedTurning;
         _pilot.IsChecked = _settings.PilotMode;
         _speed.Value = _settings.BaseSpeed;
         _speedLabel.Text = $"{_settings.BaseSpeed:0} px/s";
-        _updating = false;
+        _dropStyle.SelectedIndex = (int)_settings.DropStyle;
+        _corner.SelectedIndex = (int)_settings.HoardCorner;
         _spider.IsChecked = _settings.ShowSpider;
+        _glow.IsChecked = _settings.ShowGlow;
+        _outlines.IsChecked = _settings.ShowWindowOutlines;
+        _iconMarks.IsChecked = _settings.ShowIconMarks;
+        _info.IsChecked = _settings.ShowInfoPanel;
+        _updating = false;
     }
 }
