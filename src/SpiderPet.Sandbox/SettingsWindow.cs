@@ -26,6 +26,8 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
     private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200 };
     private readonly TextBlock _speedLabel = new();
+    private readonly CheckBox _autostart = new() { Content = "Start with Windows" };
+    private readonly TextBlock _autostartNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.75, IsVisible = false };
 
     // Drops
     private readonly ComboBox _dropStyle = new()
@@ -79,6 +81,7 @@ public sealed class SettingsWindow : Window
                  "or tap the spider to make it drop the item on the spot. " +
                  "Dropped desktop icons are really moved on your desktop (not with Auto arrange icons on)."));
         AddPage("Display", _spider, _glow, _outlines, _iconMarks, _info);
+        AddPage("General", _autostart, _autostartNote);
 
         // JetBrains-style tab strip: flat labels, an accent underline under the selected one, a hairline below the strip.
         var strip = new Border
@@ -124,6 +127,18 @@ public sealed class SettingsWindow : Window
         Wire(_outlines, v => _settings.ShowWindowOutlines = v);
         Wire(_iconMarks, v => _settings.ShowIconMarks = v);
         Wire(_info, v => _settings.ShowInfoPanel = v);
+        Wire(_autostart, v =>
+        {
+            if (!Autostart.Set(v))
+            {
+                _autostartNote.Text = Autostart.IsSupported
+                    ? "Could not change the startup entry."
+                    : "Only works when running the published exe, not from the IDE or 'dotnet run'.";
+                _autostartNote.IsVisible = true;
+            }
+            else _autostartNote.IsVisible = false;
+            Refresh();
+        });
 
         _speed.PropertyChanged += (_, e) =>
         {
@@ -244,6 +259,13 @@ public sealed class SettingsWindow : Window
         _outlines.IsChecked = _settings.ShowWindowOutlines;
         _iconMarks.IsChecked = _settings.ShowIconMarks;
         _info.IsChecked = _settings.ShowInfoPanel;
+        _autostart.IsChecked = Autostart.IsEnabled;
+        _autostart.IsEnabled = Autostart.IsSupported;
+        if (!Autostart.IsSupported)
+        {
+            _autostartNote.Text = "Only works when running the published exe, not from the IDE or 'dotnet run'.";
+            _autostartNote.IsVisible = true;
+        }
         _updating = false;
     }
 }
