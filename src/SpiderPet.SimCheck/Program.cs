@@ -40,6 +40,7 @@ RunScenario("slow creep (25 px/s)", 4.0, slow,
 
 RunWindowChecks();
 RunBrainChecks();
+RunCarryChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -159,40 +160,165 @@ void RunWindowChecks()
 
 void RunBrainChecks()
 {
-    var spider = new Spider(new Vec2(200, 200));   // 3 px per unit -> attention radius 84 px, release at 109 px
-    var brain = new SpiderBrain();
+    var spider = new Spider(new Vec2(200, 200));   // 3 px per unit -> icons: 84 px (release 109), windows: 66 px
     var cursor = new Vec2(900, 900);
     var none = new List<DesktopWindow>();
+    const double Dt = 0.25;
 
     DesktopIcon Icon(int i, double x, double y) => new(i, new RectD(x - 24, y - 24, 48, 48));
+    DesktopWindow Win(long id, double x, double y, double w, double h) => new("w" + id, new RectD(x, y, w, h), id);
     DesktopSnapshot Snap(IReadOnlyList<DesktopWindow> w, params DesktopIcon[] icons) => new(cursor, w, icons);
 
-    Vec2 t = brain.Update(spider, Snap(none, Icon(0, 600, 200)));
-    Check("far icon -> keeps looking at the cursor", t == cursor && brain.Attention is null);
+    // ---- proximity rules (sudden-change reactions off, so only these are tested)
+    var brain = new SpiderBrain { ReactToChanges = false };
 
-    t = brain.Update(spider, Snap(none, Icon(0, 260, 200)));
-    Check("near icon -> looks at the icon", t == new Vec2(260, 200) && brain.Attention?.Index == 0);
+    Vec2 t = brain.Update(Dt, spider, Snap(none, Icon(0, 600, 200)));
+    Check("far icon -> keeps looking at the cursor", t == cursor && brain.Focus == FocusKind.Cursor);
 
-    brain.Update(spider, Snap(none, Icon(0, 300, 200)));
+    t = brain.Update(Dt, spider, Snap(none, Icon(0, 260, 200)));
+    Check("near icon -> looks at the icon", t == new Vec2(260, 200) && brain.Attention?.Index == 0 && brain.Focus == FocusKind.Icon);
+
+    brain.Update(Dt, spider, Snap(none, Icon(0, 300, 200)));
     Check("hysteresis: still interested at 100 px", brain.Attention?.Index == 0);
 
-    t = brain.Update(spider, Snap(none, Icon(0, 330, 200)));
+    t = brain.Update(Dt, spider, Snap(none, Icon(0, 330, 200)));
     Check("loses interest beyond the release radius", brain.Attention is null && t == cursor);
 
-    brain.Update(spider, Snap(none, Icon(1, 280, 200), Icon(2, 230, 200)));
+    brain.Update(Dt, spider, Snap(none, Icon(1, 280, 200), Icon(2, 230, 200)));
     Check("nearest icon wins", brain.Attention?.Index == 2);
 
-    var cover = new List<DesktopWindow> { new("w", new RectD(0, 0, 500, 500), 1) };
-    t = brain.Update(spider, Snap(cover, Icon(0, 260, 200)));
-    Check("standing on a window -> ignores icons", brain.Attention is null && !brain.OnDesktop && t == cursor);
+    var cover = new List<DesktopWindow> { Win(1, 0, 0, 500, 500) };
+    t = brain.Update(Dt, spider, Snap(cover, Icon(0, 260, 200)));
+    Check("standing on a window -> ignores icons and that window", brain.Focus == FocusKind.Cursor && !brain.OnDesktop && t == cursor);
 
     brain.LookAtIcons = false;
-    t = brain.Update(spider, Snap(none, Icon(0, 260, 200)));
-    Check("switched off -> always the cursor", brain.Attention is null && t == cursor);
-
+    t = brain.Update(Dt, spider, Snap(none, Icon(0, 260, 200)));
+    Check("icons switched off -> the cursor", brain.Attention is null && t == cursor);
     brain.LookAtIcons = true;
-    t = brain.Update(spider, new DesktopSnapshot(cursor, none));
+
+    t = brain.Update(Dt, spider, new DesktopSnapshot(cursor, none));
     Check("source without icons -> cursor", t == cursor);
+
+    t = brain.Update(Dt, spider, Snap(new List<DesktopWindow> { Win(2, 250, 100, 300, 300) }));
+    Check("window edge 50 px away -> looks at the nearest edge point",
+        t == new Vec2(250, 200) && brain.Focus == FocusKind.Window && brain.AttentionWindow?.Id == 2);
+
+    t = brain.Update(Dt, spider, Snap(new List<DesktopWindow> { Win(3, 400, 100, 300, 300) }));
+    Check("window 200 px away -> cursor", t == cursor && brain.Focus == FocusKind.Cursor);
+
+    t = brain.Update(Dt, spider, Snap(new List<DesktopWindow> { Win(4, 250, 100, 300, 300) }, Icon(0, 230, 200)));
+    Check("icon (30 px) beats window edge (50 px)", brain.Focus == FocusKind.Icon && t == new Vec2(230, 200));
+
+    brain.LookAtWindows = false;
+    t = brain.Update(Dt, spider, Snap(new List<DesktopWindow> { Win(5, 250, 100, 300, 300) }));
+    Check("windows switched off -> cursor", t == cursor);
+
+    // ---- sudden changes
+    var cb = new SpiderBrain();
+    cb.Update(Dt, spider, new DesktopSnapshot(cursor, new List<DesktopWindow>()));
+    Check("nothing is news on the first frame", cb.Focus == FocusKind.Cursor);
+
+    var opened = new List<DesktopWindow> { Win(5, 600, 600, 200, 200) };
+    t = cb.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    Check("a window opening far away grabs attention", cb.Focus == FocusKind.Change && t == new Vec2(700, 700));
+
+    cb.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    cb.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    cb.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    Check("...and keeps it for one second (4 frames of 0.25 s)", cb.Focus == FocusKind.Change);
+
+    cb.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    Check("...then lets go", cb.Focus == FocusKind.Cursor);
+
+    var pb = new SpiderBrain();
+    pb.Update(Dt, spider, Snap(none, Icon(0, 230, 200)));
+    Check("(setup) near icon is watched", pb.Focus == FocusKind.Icon);
+    t = pb.Update(Dt, spider, Snap(new List<DesktopWindow> { Win(9, 800, 800, 100, 100) }, Icon(0, 230, 200)));
+    Check("a change takes priority over a near icon", pb.Focus == FocusKind.Change && t == new Vec2(850, 850));
+
+    var ib = new SpiderBrain();
+    ib.Update(Dt, spider, Snap(none, Icon(0, 600, 600)));
+    t = ib.Update(Dt, spider, Snap(none, Icon(0, 700, 600)));
+    Check("a moved icon grabs attention", ib.Focus == FocusKind.Change && t == new Vec2(700, 600));
+
+    var xb = new SpiderBrain();
+    xb.Update(Dt, spider, new DesktopSnapshot(cursor, new List<DesktopWindow> { Win(7, 600, 600, 200, 200) }));
+    t = xb.Update(Dt, spider, new DesktopSnapshot(cursor, new List<DesktopWindow>()));
+    Check("a closed window is looked at where it was", xb.Focus == FocusKind.Change && t == new Vec2(700, 700));
+
+    var tb = new SpiderBrain();
+    tb.Update(Dt, spider, Snap(none, Icon(0, 600, 600), Icon(1, 700, 600)));
+    tb.Update(Dt, spider, Snap(none));
+    tb.Update(Dt, spider, Snap(none, Icon(0, 600, 600), Icon(1, 700, 600)));
+    Check("icons coming back after an empty scan are not news", tb.Focus == FocusKind.Cursor);
+
+    var ob = new SpiderBrain { ReactToChanges = false };
+    ob.Update(Dt, spider, new DesktopSnapshot(cursor, new List<DesktopWindow>()));
+    t = ob.Update(Dt, spider, new DesktopSnapshot(cursor, opened));
+    Check("reactions switched off -> cursor", t == cursor);
+}
+
+void RunCarryChecks()
+{
+    var spider = new Spider(new Vec2(300, 300));
+    var carry = new SpiderCarry();
+    var dest = new Vec2(600, 300);
+    carry.Start(new Vec2(330, 310), dest);
+    Check("carry starts in the grab phase", carry.Phase == CarryPhase.Grab && carry.Busy && carry.HasItem);
+
+    const double dt = 1.0 / 120.0;
+    var seen = new HashSet<CarryPhase>();
+    double minDistance = double.MaxValue;
+    int frames = 0;
+    for (; frames < 120 * 40 && carry.Phase != CarryPhase.Rest; frames++)
+    {
+        carry.Update(dt, spider);
+        spider.Update(dt);
+        seen.Add(carry.Phase);
+        minDistance = Math.Min(minDistance, (spider.Position - dest).Length);
+    }
+
+    Check("walks to the destination and sets the item down",
+        carry.Phase == CarryPhase.Rest && seen.Contains(CarryPhase.Carry) && seen.Contains(CarryPhase.Place) && minDistance < 40);
+    Check("the spider is free again once the item lies down", !carry.Busy && carry.HasItem);
+
+    for (int i = 0; i < 120 * 8 && carry.Phase != CarryPhase.Idle; i++)
+        carry.Update(dt, spider);
+    Check("the item fades away after resting", carry.Phase == CarryPhase.Idle && !carry.HasItem);
+
+    var s2 = new Spider(new Vec2(300, 300));
+    var c2 = new SpiderCarry();
+    c2.Start(new Vec2(330, 310), new Vec2(900, 300));
+    for (int i = 0; i < 120; i++) { c2.Update(dt, s2); s2.Update(dt); }
+    c2.Cancel();
+    Check("picking the spider up drops the item where it is", c2.Phase == CarryPhase.Rest && !c2.Busy);
+
+    var area = new RectD(0, 0, 1000, 800);
+    var snap = new DesktopSnapshot(new Vec2(500, 400), new List<DesktopWindow>(), new List<DesktopIcon>());
+    bool inside = true, near = true, gift = true;
+    var rng = new Random(7);
+    for (int i = 0; i < 200; i++)
+    {
+        Vec2 d = SpiderCarry.PickDestination(spider, snap, area, rng, false);
+        inside &= d.X >= 60 && d.X <= 940 && d.Y >= 60 && d.Y <= 740;
+        near &= (d - spider.Position).Length <= 330 + 1e-6 || d.X <= 60 || d.X >= 940 || d.Y <= 60 || d.Y >= 740;
+        Vec2 g = SpiderCarry.PickDestination(spider, snap, area, rng, true);
+        gift &= (g - snap.Cursor).Length <= 102 + 1e-6;
+    }
+    Check("destinations stay inside the screen", inside);
+    Check("nearby destinations are a short walk away", near);
+    Check("gift destinations are beside the cursor", gift);
+
+    var win = new DesktopWindow("w", new RectD(0, 0, 400, 800), 1);
+    var snapWin = new DesktopSnapshot(new Vec2(900, 400), new List<DesktopWindow> { win });
+    var onDesktop = new Spider(new Vec2(700, 400));
+    bool avoids = true;
+    for (int i = 0; i < 200; i++)
+    {
+        Vec2 d = SpiderCarry.PickDestination(onDesktop, snapWin, area, rng, false);
+        avoids &= !win.Bounds.Contains(d);
+    }
+    Check("a spider on the bare desktop does not carry things into a window", avoids);
 }
 
 sealed class ScriptedSource : IDesktopSource

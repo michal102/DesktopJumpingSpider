@@ -4,13 +4,16 @@ namespace SpiderPet.Sandbox;
 public sealed class AppSettings
 {
     private bool _showWindowOutlines = false;
-    private bool _showInfoPanel = false;
+    private bool _showInfoPanel = true;
     private bool _showGlow;
     private bool _pilotMode= true;
     private double _baseSpeed = 180.0;
     private bool _showSpider = true;
-    private bool _showIconMarks = false;
+    private bool _showIconMarks = true;
     private bool _lookAtIcons = true;
+    private bool _lookAtWindows = true;
+    private bool _reactToChanges = true;
+    private bool _carryToCursor;
     public bool ShowSpider { get => _showSpider; set => Set(ref _showSpider, value); }
 
     /// <summary>Outline every desktop icon the program has found.</summary>
@@ -18,6 +21,15 @@ public sealed class AppSettings
 
     /// <summary>When standing on the desktop, look at a desktop icon that is close instead of at the cursor.</summary>
     public bool LookAtIcons { get => _lookAtIcons; set => Set(ref _lookAtIcons, value); }
+
+    /// <summary>Look at a window whose edge is close to the spider.</summary>
+    public bool LookAtWindows { get => _lookAtWindows; set => Set(ref _lookAtWindows, value); }
+
+    /// <summary>Look at sudden changes (window opened or closed, icon moved) for a second, before anything else.</summary>
+    public bool ReactToChanges { get => _reactToChanges; set => Set(ref _reactToChanges, value); }
+
+    /// <summary>Things dropped on the spider are brought to the cursor like a gift, instead of being laid down nearby.</summary>
+    public bool CarryToCursor { get => _carryToCursor; set => Set(ref _carryToCursor, value); }
 
     /// <summary>Raised after any value actually changed.</summary>
     public event Action? Changed;

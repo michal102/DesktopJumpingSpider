@@ -268,6 +268,9 @@ public sealed class OverlayWindow : Window
         _view.SpiderVisible = _settings.ShowSpider;
         _view.ShowIconMarks = _settings.ShowIconMarks;
         _view.Brain.LookAtIcons = _settings.LookAtIcons;
+        _view.Brain.LookAtWindows = _settings.LookAtWindows;
+        _view.Brain.ReactToChanges = _settings.ReactToChanges;
+        _view.CarryToCursor = _settings.CarryToCursor;
         _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons;
         
         if (_spiderItem is not null) _spiderItem.Header = SpiderHeader();
@@ -293,7 +296,8 @@ public sealed class OverlayWindow : Window
             $"spider overlay   {_view.Fps:0} fps   speed {s.Speed:0} px/s\n" +
             $"windows tracked: {_view.Watcher.Current.Windows.Count}   standing on: {_view.Perch?.Title ?? "-"}\n" +
             $"last event: {_view.LastEvent}\n" +
-            $"on desktop: {(_view.Brain.OnDesktop ? "yes" : "no")}   icons: {_view.Watcher.Current.Icons?.Count ?? 0}   looking at: {(_view.Brain.Attention is { } a ? $"icon #{a.Index}" : "cursor")}\n" +
+            $"on desktop: {(_view.Brain.OnDesktop ? "yes" : "no")}   icons: {_view.Watcher.Current.Icons?.Count ?? 0}   looking at: {_view.Brain.FocusLabel}\n" +
+            $"carrying: {_view.Carry.Phase}   (drop a file onto the spider)\n" +
             $"pilot: {(_settings.PilotMode ? "ON" : "off")} (Ctrl+Alt+F8)   outlines (Ctrl+Alt+F9)   quit (Ctrl+Alt+F12)\n" +
             "right-click the spider for its menu";
     }

@@ -11,11 +11,11 @@ public sealed class MockDesktop : IDesktopSource
 {
     private readonly List<DesktopWindow> _windows = new()
     {
-        new DesktopWindow("Editor",   new RectD(60, 70, 420, 300)),
-        new DesktopWindow("Browser",  new RectD(560, 50, 520, 360)),
-        new DesktopWindow("Terminal", new RectD(130, 470, 360, 230)),
-        new DesktopWindow("Chat",     new RectD(830, 510, 300, 210)),
-        new DesktopWindow("Dialog",   new RectD(560, 470, 190, 110)),
+        new DesktopWindow("Editor",   new RectD(60, 70, 420, 300), 1),
+        new DesktopWindow("Browser",  new RectD(560, 50, 520, 360), 2),
+        new DesktopWindow("Terminal", new RectD(130, 470, 360, 230), 3),
+        new DesktopWindow("Chat",     new RectD(830, 510, 300, 210), 4),
+        new DesktopWindow("Dialog",   new RectD(560, 470, 190, 110), 5),
     };
 
     private readonly List<DesktopIcon> _icons = new()

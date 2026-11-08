@@ -40,6 +40,7 @@ public sealed class SandboxView : Control
     private static readonly IPen DebugWindowPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 80, 80)), 1.5);
     private static readonly IPen IconMarkPen = new Pen(new SolidColorBrush(Color.FromArgb(210, 0, 200, 255)), 1.5);
     private static readonly IPen IconAttentionPen = new Pen(new SolidColorBrush(Color.FromArgb(240, 255, 190, 0)), 2.5);
+    private static readonly IPen ChangeRingPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 60, 60)), 3);
     private static readonly IPen IconLinkPen = new Pen(new SolidColorBrush(Color.FromArgb(150, 255, 190, 0)), 1);
     private static readonly IPen DebugPerchPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 190, 0)), 3);
 
@@ -56,6 +57,8 @@ public sealed class SandboxView : Control
     private DesktopWatcher _watcher;
     private readonly WindowRider _rider = new();
     private readonly SpiderBrain _brain = new();
+    private readonly SpiderCarry _carry = new();
+    private readonly Random _rng = new();
 
     private Vec2 _dragOffset;
     private Vec2 _lastMousePosition;
@@ -198,6 +201,11 @@ public sealed class SandboxView : Control
         _watcher = new DesktopWatcher(Desktop);
         HookWatcher();
 
+        // Files (or anything else) dragged onto the spider. Only the spider itself accepts a drop.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
+
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(8), DispatcherPriority.Render, OnTick);
     }
 
@@ -223,6 +231,12 @@ public sealed class SandboxView : Control
 
     /// <summary>Decides where the spider looks (cursor, or a nearby desktop icon).</summary>
     public SpiderBrain Brain => _brain;
+
+    /// <summary>The "something was dropped on me" behaviour: grab it, carry it, set it down.</summary>
+    public SpiderCarry Carry => _carry;
+
+    /// <summary>Bring dropped items to the cursor like a gift instead of laying them down near the spider.</summary>
+    public bool CarryToCursor { get; set; }
 
     /// <summary>Outline every desktop icon the source reports.</summary>
     public bool ShowIconMarks { get; set; } = true;
@@ -348,7 +362,12 @@ public sealed class SandboxView : Control
         if (carry != Vec2.Zero)
             Spider.Translate(carry);
 
-        ApplyInput();
+        ApplyInput(dt);
+
+        if (_isDragging && _carry.Busy)
+            _carry.Cancel();
+        _carry.Update(dt, Spider);
+
         Spider.Update(dt);
         KeepInside();
 
@@ -356,7 +375,34 @@ public sealed class SandboxView : Control
         InvalidateVisual();
     }
 
-    private void ApplyInput()
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        Point p = e.GetPosition(this);
+        e.DragEffects = _spiderVisible && IsOverSpider(new Vec2(p.X, p.Y)) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    // Copy, never Move: the source must not think we took the file, so nothing gets deleted or moved on disk.
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+
+        Point p = e.GetPosition(this);
+        var at = new Vec2(p.X, p.Y);
+        if (!_spiderVisible || !IsOverSpider(at))
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
+
+        e.DragEffects = DragDropEffects.Copy;
+
+        Vec2 destination = SpiderCarry.PickDestination(
+            Spider, _watcher.Current, new RectD(0, 0, Bounds.Width, Bounds.Height), _rng, CarryToCursor);
+        _carry.Start(at, destination);
+    }
+
+    private void ApplyInput(double dt)
     {
         if (_isDragging)
         {
@@ -383,7 +429,7 @@ public sealed class SandboxView : Control
         Spider.Speed = _baseSpeed *
                        (sprint ? SprintFactor : 1.0);
 
-        Spider.LookTarget = _brain.Update(Spider, _watcher.Current);
+        Spider.LookTarget = _brain.Update(dt, Spider, _watcher.Current);
     }
 
     private void KeepInside()
@@ -418,8 +464,11 @@ public sealed class SandboxView : Control
                 DrawDebugWindows(context);
             if (ShowIconMarks)
                 DrawIconMarks(context);
+            if (ShowIconMarks || ShowDebug)
+                DrawFocus(context);
 
             if (_spiderVisible) { DrawGlow(context); SpiderRenderer.Draw(context, Spider); }
+            DrawCarriedItem(context);
             return;
         }
 
@@ -437,6 +486,8 @@ public sealed class SandboxView : Control
             context.DrawRectangle(DotBrush, null, new Rect(icon.Bounds.X, icon.Bounds.Y, icon.Bounds.Width, icon.Bounds.Height), 6, 6);
         if (ShowIconMarks)
             DrawIconMarks(context);
+        if (ShowIconMarks || ShowDebug)
+            DrawFocus(context);
 
         Vec2 cursor = Desktop.Cursor;
         Vec2 pos = Spider.Position;
@@ -452,10 +503,65 @@ public sealed class SandboxView : Control
 
         DrawGlow(context);
         SpiderRenderer.Draw(context, Spider);
+        DrawCarriedItem(context);
 
         if (ShowCursorOverlay)
         {
             DrawCursor(context, cursor);
+        }
+    }
+
+    private static readonly IBrush ItemShadowBrush = new SolidColorBrush(Color.FromArgb(80, 0, 0, 0));
+    private static readonly IBrush ItemPaperBrush = new SolidColorBrush(Color.Parse("#F3F5F9"));
+    private static readonly IBrush ItemFoldBrush = new SolidColorBrush(Color.Parse("#C9CFDA"));
+    private static readonly IBrush ItemLineBrush = new SolidColorBrush(Color.Parse("#9AA3B2"));
+    private static readonly IPen ItemPen = new Pen(new SolidColorBrush(Color.Parse("#5A6270")), 1.2);
+
+    // The thing the spider was handed: a generic sheet of paper, drawn upright and rotated with the carry angle.
+    private void DrawCarriedItem(DrawingContext context)
+    {
+        if (!_carry.HasItem || _carry.ItemAlpha <= 0.0) return;
+
+        double u = Spider.PixelsPerUnit;
+        double w = 8.0 * u * _carry.ItemScale;
+        double h = 10.0 * u * _carry.ItemScale;
+        double fold = 2.6 * u * _carry.ItemScale;
+        Vec2 at = _carry.ItemPosition;
+
+        using (context.PushOpacity(_carry.ItemAlpha))
+        using (context.PushTransform(
+                   Matrix.CreateRotation(_carry.ItemAngleDeg * Math.PI / 180.0) *
+                   Matrix.CreateTranslation(at.X, at.Y)))
+        {
+            context.DrawEllipse(ItemShadowBrush, null, new Point(2, h * 0.45), w * 0.6, h * 0.18);
+
+            var sheet = new StreamGeometry();
+            using (StreamGeometryContext g = sheet.Open())
+            {
+                g.BeginFigure(new Point(-w / 2, -h / 2), true);
+                g.LineTo(new Point(w / 2 - fold, -h / 2));
+                g.LineTo(new Point(w / 2, -h / 2 + fold));
+                g.LineTo(new Point(w / 2, h / 2));
+                g.LineTo(new Point(-w / 2, h / 2));
+                g.EndFigure(true);
+            }
+            context.DrawGeometry(ItemPaperBrush, ItemPen, sheet);
+
+            var corner = new StreamGeometry();
+            using (StreamGeometryContext g = corner.Open())
+            {
+                g.BeginFigure(new Point(w / 2 - fold, -h / 2), true);
+                g.LineTo(new Point(w / 2 - fold, -h / 2 + fold));
+                g.LineTo(new Point(w / 2, -h / 2 + fold));
+                g.EndFigure(true);
+            }
+            context.DrawGeometry(ItemFoldBrush, ItemPen, corner);
+
+            for (int i = 0; i < 3; i++)
+            {
+                double y = -h / 2 + fold + 0.9 * u + i * 1.5 * u;
+                context.DrawLine(new Pen(ItemLineBrush, 1.4), new Point(-w / 2 + 1.2 * u, y), new Point(w / 2 - 1.2 * u - (i == 2 ? 1.5 * u : 0), y));
+            }
         }
     }
 
@@ -478,12 +584,17 @@ public sealed class SandboxView : Control
             bool looked = attention is not null && attention.Index == icon.Index;
             context.DrawRectangle(null, looked ? IconAttentionPen : IconMarkPen, r, 6, 6);
         }
+    }
 
-        if (attention is not null && _spiderVisible)
-        {
-            Vec2 c = attention.Center;
-            context.DrawLine(IconLinkPen, new Point(Spider.Position.X, Spider.Position.Y), new Point(c.X, c.Y));
-        }
+    // A line from the spider to whatever it is looking at when that is not the cursor; a ring for sudden changes.
+    private void DrawFocus(DrawingContext context)
+    {
+        if (!_spiderVisible || _brain.Focus == FocusKind.Cursor) return;
+
+        Vec2 f = _brain.FocusPoint;
+        context.DrawLine(IconLinkPen, new Point(Spider.Position.X, Spider.Position.Y), new Point(f.X, f.Y));
+        if (_brain.Focus == FocusKind.Change)
+            context.DrawEllipse(null, ChangeRingPen, new Point(f.X, f.Y), 26, 26);
     }
 
     private void DrawDebugWindows(DrawingContext context)

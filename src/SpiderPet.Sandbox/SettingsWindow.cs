@@ -20,6 +20,9 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _spider = new() { Content = "Show spider (Ctrl+Alt+F10)" };
     private readonly CheckBox _iconMarks = new() { Content = "Mark desktop icons" };
     private readonly CheckBox _lookIcons = new() { Content = "Look at nearby desktop icons" };
+    private readonly CheckBox _lookWindows = new() { Content = "Look at nearby windows" };
+    private readonly CheckBox _carryGift = new() { Content = "Bring dropped items to the cursor (instead of nearby)" };
+    private readonly CheckBox _reactChanges = new() { Content = "React to sudden changes (new window, moved icon)" };
 
     public SettingsWindow(AppSettings settings, Action quit)
     {
@@ -62,7 +65,7 @@ public sealed class SettingsWindow : Window
             Children =
             {
                 _spider,
-                _outlines, _iconMarks, _info, _glow, _pilot, _lookIcons,
+                _outlines, _iconMarks, _info, _glow, _pilot, _lookIcons, _lookWindows, _reactChanges, _carryGift,
                 new TextBlock { Text = "Walking speed", Margin = new Thickness(0, 10, 0, 0) },
                 _speed, _speedLabel,
                 buttons,
@@ -81,6 +84,9 @@ public sealed class SettingsWindow : Window
         };
         _iconMarks.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowIconMarks = _iconMarks.IsChecked == true; };
         _lookIcons.IsCheckedChanged += (_, _) => { if (!_updating) _settings.LookAtIcons = _lookIcons.IsChecked == true; };
+        _lookWindows.IsCheckedChanged += (_, _) => { if (!_updating) _settings.LookAtWindows = _lookWindows.IsChecked == true; };
+        _reactChanges.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ReactToChanges = _reactChanges.IsChecked == true; };
+        _carryGift.IsCheckedChanged += (_, _) => { if (!_updating) _settings.CarryToCursor = _carryGift.IsChecked == true; };
         _spider.IsCheckedChanged += (_, _) => { if (!_updating) _settings.ShowSpider = _spider.IsChecked == true; };
 
         _settings.Changed += Refresh;
@@ -94,6 +100,9 @@ public sealed class SettingsWindow : Window
         _outlines.IsChecked = _settings.ShowWindowOutlines;
         _iconMarks.IsChecked = _settings.ShowIconMarks;
         _lookIcons.IsChecked = _settings.LookAtIcons;
+        _lookWindows.IsChecked = _settings.LookAtWindows;
+        _reactChanges.IsChecked = _settings.ReactToChanges;
+        _carryGift.IsChecked = _settings.CarryToCursor;
         _info.IsChecked = _settings.ShowInfoPanel;
         _glow.IsChecked = _settings.ShowGlow;
         _pilot.IsChecked = _settings.PilotMode;
