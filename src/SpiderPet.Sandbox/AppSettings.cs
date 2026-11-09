@@ -20,7 +20,7 @@ public sealed class AppSettings
     private bool _showInfoPanel = false;
     private bool _showGlow;
     private bool _pilotMode= true;
-    private double _baseSpeed = 180.0;
+    private double _baseSpeed = 300.0;
     private bool _showSpider = true;
     private bool _showIconMarks = false;
     private bool _lookAtIcons = true;
@@ -29,6 +29,8 @@ public sealed class AppSettings
     private DropMode _dropStyle = DropMode.Hoard;
     private SpiderCorner _hoardCorner = SpiderCorner.TopRight;
     private bool _steppedTurning = true;
+    private bool _lookAtText = true;
+    private bool _dodgeWindows = true;
     public bool ShowSpider { get => _showSpider; set => Set(ref _showSpider, value); }
 
     /// <summary>Outline every desktop icon the program has found.</summary>
@@ -42,6 +44,12 @@ public sealed class AppSettings
 
     /// <summary>Look at sudden changes (window opened or closed, icon moved) for a second, before anything else.</summary>
     public bool ReactToChanges { get => _reactToChanges; set => Set(ref _reactToChanges, value); }
+
+    /// <summary>Look at the text caret while someone types close to the spider.</summary>
+    public bool LookAtText { get => _lookAtText; set => Set(ref _lookAtText, value); }
+
+    /// <summary>Hop back a little from a window that is coming fast at the spider.</summary>
+    public bool DodgeWindows { get => _dodgeWindows; set => Set(ref _dodgeWindows, value); }
 
     /// <summary>What the spider does with a file it likes (files it dislikes are always dumped in the far corner).</summary>
     public DropMode DropStyle { get => _dropStyle; set => Set(ref _dropStyle, value); }

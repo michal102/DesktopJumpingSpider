@@ -404,6 +404,42 @@ public sealed class Spider
     private double _reach;
     private double _reachTime;
 
+    // ---------------------------------------------------------------- leaping
+
+    /// <summary>True while a leap (<see cref="Leap"/>) is under way.</summary>
+    public bool IsLeaping => _leapLeft > 0.0;
+
+    /// <summary>0..1..0 over a leap, peaking mid-air. The renderer uses it to make the spider swell and cast a shadow.</summary>
+    public double LeapArc => _leapLeft > 0.0 ? Math.Sin(Math.PI * (1.0 - _leapLeft / _leapDur)) : 0.0;
+
+    /// <summary>Where the current leap ends.</summary>
+    public Vec2 LeapLanding => _leapStart + _leapDir * _leapDistance;
+
+    private double _leapLeft;
+    private double _leapDur = 0.3;
+    private double _leapDistance;
+    private double _leapHeading;
+    private Vec2 _leapDir;
+    private Vec2 _leapStart;
+
+    /// <summary>
+    /// A quick hop of <paramref name="distance"/> px in <paramref name="direction"/> (any length), taking
+    /// <paramref name="seconds"/>. The body whips round to face the way it goes and bursts off; input is ignored meanwhile.
+    /// </summary>
+    public void Leap(Vec2 direction, double distance, double seconds = 0.32)
+    {
+        if (direction.Length < 1e-6 || distance <= 0.0 || seconds <= 0.0) return;
+        _leapDir = direction.Normalized();
+        _leapDistance = distance;
+        _leapDur = seconds;
+        _leapLeft = seconds;
+        _leapStart = Position;
+        _leapHeading = MathUtil.HeadingFromTo(Vec2.Zero, _leapDir);
+    }
+
+    /// <summary>Stops a leap in mid-air (the user grabbed the spider).</summary>
+    public void CancelLeap() => _leapLeft = 0.0;
+
     private Vec2 HomeWorld(SpiderLeg leg) => Position + GetDynamicHomeLocal(leg).Rotated(HeadingDeg);
 
     private Vec2 HomeAt(SpiderLeg leg, double lead)
@@ -431,7 +467,12 @@ public sealed class Spider
         else if (LookTarget is null && Velocity.Length > 5.0)
             target = MathUtil.HeadingFromTo(Vec2.Zero, Velocity);
 
-        if (SteppedTurning)
+        bool leaping = _leapLeft > 0.0;
+        if (leaping)
+            target = _leapHeading;          // a leap faces the way it goes, and turns fast
+        double boost = leaping ? 3.0 : 1.0;
+
+        if (SteppedTurning && !leaping)
         {
             SteppedTurn(dt, target);
         }
@@ -444,10 +485,10 @@ public sealed class Spider
             if (target is double tgt)
             {
                 double delta = MathUtil.Wrap(tgt - HeadingDeg);
-                want = Math.Clamp(delta * TurnGain, -TurnRate, TurnRate);
+                want = Math.Clamp(delta * TurnGain * boost, -TurnRate * boost, TurnRate * boost);
             }
             _cmdTurn = want;
-            AngularVelocityDeg = MathUtil.MoveToward(AngularVelocityDeg, want, TurnAcceleration * dt);
+            AngularVelocityDeg = MathUtil.MoveToward(AngularVelocityDeg, want, TurnAcceleration * boost * dt);
             HeadingDeg = MathUtil.Wrap(HeadingDeg + AngularVelocityDeg * dt);
         }
 
@@ -461,11 +502,24 @@ public sealed class Spider
         }
         Vec2 desired = input * Speed;
         _cmdSpeed = desired.Length;
-        Vec2 dv = desired - Velocity;
-        double rate = (inputLen > 1e-6 ? Acceleration : Deceleration) * dt;
-        double dl = dv.Length;
-        Velocity = dl <= rate ? desired : Velocity + dv * (rate / dl);
-        Position = Position + Velocity * dt;
+        if (_leapLeft > 0.0)
+        {
+            // bell-shaped burst of speed whose area is exactly the leap distance
+            double u = 1.0 - _leapLeft / _leapDur;
+            double bell = 1.0 - (2.0 * u - 1.0) * (2.0 * u - 1.0);
+            Velocity = _leapDir * (_leapDistance / _leapDur * 1.5 * bell);
+            _cmdSpeed = Velocity.Length;
+            Position = Position + Velocity * dt;
+            _leapLeft -= dt;
+        }
+        else
+        {
+            Vec2 dv = desired - Velocity;
+            double rate = (inputLen > 1e-6 ? Acceleration : Deceleration) * dt;
+            double dl = dv.Length;
+            Velocity = dl <= rate ? desired : Velocity + dv * (rate / dl);
+            Position = Position + Velocity * dt;
+        }
 
         // ---- abdomen: damped spring chasing the carapace heading (this is the body bend)
         double cdamp = 2.0 * AbdomenDamping * Math.Sqrt(AbdomenStiffness);

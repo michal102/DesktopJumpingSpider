@@ -43,6 +43,8 @@ RunBrainChecks();
 RunCarryChecks();
 RunDropFeatureChecks();
 RunStateChecks();
+RunPokeAndSkitterChecks();
+RunDeleteTypeDodgeChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -380,6 +382,175 @@ void RunStateChecks()
     carry.Placed += pt => placedAt = pt;
     carry.Start(new Vec2(300, 300), new Vec2(800, 300));
     Check("tap drops the item where it is", carry.Drop() && !carry.Busy && placedAt is not null && !carry.Drop());
+}
+
+void RunPokeAndSkitterChecks()
+{
+    // skittering path
+    var path = new SkitterPath(new Random(3));
+    path.Plan(new Vec2(0, 0), new Vec2(600, 0));
+    var pts = path.Points;
+    double maxSide = pts.Max(p => Math.Abs(p.Y));
+    Check("a long walk is divided into several waypoints", pts.Count >= 6);
+    Check("the last waypoint is the goal", pts[^1] == new Vec2(600, 0));
+    Check("waypoints swing to both sides of the straight line", pts.Any(p => p.Y > 5) && pts.Any(p => p.Y < -5));
+    Check("the detours stay small", maxSide <= path.MaxSideOffset + 1e-6);
+    var shortPath = new SkitterPath(new Random(3));
+    shortPath.Plan(new Vec2(0, 0), new Vec2(90, 0));
+    Check("a short walk stays direct", shortPath.Points.Count == 1);
+
+    // a carry that skitters still arrives, and does not walk a ruler-straight line
+    const double dt = 1.0 / 120.0;
+    var spider = new Spider(new Vec2(300, 300));
+    var carry = new SpiderCarry();
+    Vec2? placed = null;
+    carry.Placed += pt => placed = pt;
+    carry.Start(new Vec2(330, 310), new Vec2(900, 300));
+    double maxOff = 0;
+    for (int i = 0; i < 120 * 40 && carry.Phase != CarryPhase.Rest; i++)
+    {
+        carry.Update(dt, spider);
+        spider.Update(dt);
+        if (carry.Phase == CarryPhase.Carry)
+            maxOff = Math.Max(maxOff, Math.Abs(spider.Position.Y - 300));
+    }
+    Check("a skittering carry arrives at the goal", placed is Vec2 pv && (pv - new Vec2(900, 300)).Length < 40);
+    Check("it wandered off the straight line while walking", maxOff > 6);
+
+    var straight = new Spider(new Vec2(300, 300));
+    var c2 = new SpiderCarry { Skitter = false, Jerky = false };
+    c2.Start(new Vec2(330, 310), new Vec2(900, 300));
+    double maxOff2 = 0;
+    for (int i = 0; i < 120 * 40 && c2.Phase != CarryPhase.Rest; i++)
+    {
+        c2.Update(dt, straight);
+        straight.Update(dt);
+        if (c2.Phase == CarryPhase.Carry)
+            maxOff2 = Math.Max(maxOff2, Math.Abs(straight.Position.Y - 300));
+    }
+    Check("with skittering off the walk is straight", maxOff2 < maxOff);
+
+    // stop-and-go: it freezes between dashes, several times on a walk
+    var jSpider = new Spider(new Vec2(300, 300));
+    var jerky = new SpiderCarry(new Random(11));
+    jerky.Start(new Vec2(330, 310), new Vec2(900, 300));
+    int pauses = 0, stillFrames = 0, movingFrames = 0;
+    bool wasPausing = false;
+    for (int i = 0; i < 120 * 40 && jerky.Phase != CarryPhase.Rest; i++)
+    {
+        jerky.Update(dt, jSpider);
+        jSpider.Update(dt);
+        if (jerky.Phase != CarryPhase.Carry) continue;
+        if (jerky.Pausing && !wasPausing) pauses++;
+        wasPausing = jerky.Pausing;
+        if (jerky.Pausing) stillFrames++; else movingFrames++;
+    }
+    Check("a jerky walk stops several times on the way", pauses >= 5);
+    Check("it spends a fair share of the walk standing still, and the rest moving",
+        stillFrames > movingFrames / 6 && movingFrames > stillFrames / 3);
+    Check("a jerky walk still arrives", jerky.Phase == CarryPhase.Rest);
+
+    // leaping
+    var hopper = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) hopper.Update(dt);
+    Vec2 start = hopper.Position;
+    hopper.Leap(new Vec2(1, 0), 150);
+    var brain = new SpiderBrain();
+    var snap = new DesktopSnapshot(new Vec2(100, 500), new List<DesktopWindow>());
+    brain.Think(dt, hopper, snap, default);
+    Check("a leap puts the brain in the leaping state", hopper.IsLeaping && brain.State == SpiderState.Leaping);
+
+    double peak = 0;
+    for (int i = 0; i < 120 && hopper.IsLeaping; i++)
+    {
+        hopper.Update(dt);
+        peak = Math.Max(peak, hopper.LeapArc);
+    }
+    for (int i = 0; i < 60; i++) hopper.Update(dt);
+    double travelled = (hopper.Position - start).Length;
+    Check("a leap covers about the asked distance", travelled > 130 && travelled < 175);
+    Check("a leap has an arc that peaks mid-air", peak > 0.95);
+    Check("it lands facing the way it went", Math.Abs(MathUtilWrap(hopper.HeadingDeg - 90.0)) < 25);
+    brain.Think(dt, hopper, snap, default);
+    Check("the brain goes back to watching after the leap", brain.State == SpiderState.Watching);
+
+    var grabbed = new Spider(new Vec2(500, 500));
+    grabbed.Leap(new Vec2(0, -1), 150);
+    grabbed.CancelLeap();
+    Check("grabbing the spider cancels the leap", !grabbed.IsLeaping && grabbed.LeapArc == 0.0);
+}
+
+void RunDeleteTypeDodgeChecks()
+{
+    const double dt = 1.0 / 60.0;
+    var windows = new List<DesktopWindow>();
+
+    // a deleted icon is noticed even though the indices of the others shift
+    var spider = new Spider(new Vec2(320, 400));
+    var brain = new SpiderBrain();
+    var icons1 = new List<DesktopIcon>
+    {
+        new(0, new RectD(100, 100, 48, 48)), new(1, new RectD(300, 100, 48, 48)), new(2, new RectD(500, 100, 48, 48)),
+    };
+    brain.Think(dt, spider, new DesktopSnapshot(new Vec2(900, 700), windows, icons1), default);
+    var icons2 = new List<DesktopIcon>
+    {
+        new(0, new RectD(100, 100, 48, 48)), new(1, new RectD(500, 100, 48, 48)),
+    };
+    brain.Think(dt, spider, new DesktopSnapshot(new Vec2(900, 700), windows, icons2), default);
+    Check("deleting an icon startles the spider",
+        brain.State == SpiderState.Startled && brain.FocusLabel == "change: icon removed");
+    Check("it looks at the empty spot", (brain.FocusPoint - new Vec2(324, 124)).Length < 1.0);
+
+    // the shift of the other indices alone is not a change
+    var calm = new SpiderBrain();
+    calm.Think(dt, spider, new DesktopSnapshot(new Vec2(900, 700), windows, icons1), default);
+    var same = new List<DesktopIcon>(icons1);
+    calm.Think(dt, spider, new DesktopSnapshot(new Vec2(900, 700), windows, same), default);
+    Check("an unchanged desktop does not startle it", calm.State == SpiderState.Watching);
+
+    // typing
+    var s2 = new Spider(new Vec2(300, 300));
+    var b2 = new SpiderBrain();
+    Vec2? look = b2.Think(dt, s2, new DesktopSnapshot(new Vec2(900, 700), windows, null, new Vec2(360, 300), true), default);
+    Check("typing close by makes it watch the text", b2.State == SpiderState.LookingAtText && look == new Vec2(360, 300));
+    b2.Think(dt, s2, new DesktopSnapshot(new Vec2(900, 700), windows, null, new Vec2(360, 300), false), default);
+    Check("no typing, no looking", b2.State == SpiderState.Watching);
+    b2.Think(dt, s2, new DesktopSnapshot(new Vec2(900, 700), windows, null, new Vec2(900, 300), true), default);
+    Check("typing far away is ignored", b2.State == SpiderState.Watching);
+    b2.LookAtText = false;
+    b2.Think(dt, s2, new DesktopSnapshot(new Vec2(900, 700), windows, null, new Vec2(360, 300), true), default);
+    Check("the toggle turns it off", b2.State == SpiderState.Watching);
+
+    // an approaching window: a short hop back, but not a full escape
+    Vec2 Run(double perFrame, bool away, out bool dodged)
+    {
+        var sp = new Spider(new Vec2(600, 300));
+        for (int i = 0; i < 30; i++) sp.Update(dt);
+        var br = new SpiderBrain();
+        bool hopped = false;
+        br.Dodged += () => hopped = true;
+        Vec2 start = sp.Position;
+        double x = 100.0;
+        for (int i = 0; i < 90; i++)
+        {
+            x += away ? -perFrame : perFrame;
+            var list = new List<DesktopWindow> { new("w", new RectD(x, 100, 200, 400), 7) };
+            br.Think(dt, sp, new DesktopSnapshot(new Vec2(50, 700), list), default);
+            sp.Update(dt);
+            if (hopped) break;
+        }
+        for (int i = 0; i < 60; i++) sp.Update(dt);
+        dodged = hopped;
+        return sp.Position - start;
+    }
+
+    Vec2 moved = Run(12.0, false, out bool fast);
+    Check("a fast window coming at it makes it hop back", fast && moved.X > 15 && moved.X < 70);
+    Run(1.5, false, out bool slow);
+    Check("a slow window is no reason to hop", !slow);
+    Run(12.0, true, out bool receding);
+    Check("a window moving away is ignored", !receding);
 }
 
 void RunCarryChecks()

@@ -39,6 +39,8 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
 
     private const double IconScanSeconds = 0.2;
 
+    private readonly TypingWatcher _typing = new();
+
     private readonly DesktopIconReader _iconReader = new();
     private double _lastIconScan = double.NegativeInfinity;
     private IReadOnlyList<DesktopIcon> _icons = Array.Empty<DesktopIcon>();
@@ -55,6 +57,9 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
 
     /// <summary>Whether desktop icons are read (5 times a second). Turn off when nothing needs them.</summary>
     public bool TrackIcons { get; set; } = true;
+
+    /// <summary>Whether typing is noticed and the caret position reported (see <see cref="TypingWatcher"/>).</summary>
+    public bool TrackTyping { get; set; } = true;
 
     /// <summary>A window that must never be reported (the overlay itself). Other windows of this process, e.g. settings, are reported.</summary>
     public IntPtr IgnoredWindow { get; set; }
@@ -98,7 +103,12 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
             _lastIconScan = now;
         }
 
-        return new DesktopSnapshot(new Vec2(cursor.X, cursor.Y), _windows, _icons);
+        bool typing = TrackTyping && _typing.Update();
+        Vec2? caret = null;
+        if (typing && TypingWatcher.TryGetCaret(out Vec2 caretAt))
+            caret = caretAt;
+
+        return new DesktopSnapshot(new Vec2(cursor.X, cursor.Y), _windows, _icons, caret, typing && caret is not null);
     }
 
     // Between full scans only the rectangles are re-read. Without this a dragged window would be sampled at the

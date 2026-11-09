@@ -9,8 +9,10 @@ public enum FocusKind
     Icon,
     /// <summary>A window close to the spider.</summary>
     Window,
-    /// <summary>A sudden change: a window opened or closed, an icon moved or appeared.</summary>
+    /// <summary>A sudden change: a window opened or closed, an icon moved, appeared or was deleted.</summary>
     Change,
+    /// <summary>The place where someone is typing.</summary>
+    Text,
 }
 
 /// <summary>
@@ -25,10 +27,14 @@ public enum SpiderState
     Carrying,
     /// <summary>An item is being dragged over the spider: it turns to it and reaches for it with its front legs.</summary>
     Reaching,
+    /// <summary>It was poked (clicked) and is hopping away from the mouse.</summary>
+    Leaping,
     /// <summary>It was just made to let go of an item (tap) and looks at what it dropped, for a moment.</summary>
     Dropping,
     /// <summary>Something suddenly changed on the desktop (window opened/closed, icon moved): it stares at it.</summary>
     Startled,
+    /// <summary>Someone is typing close to the spider: it watches the text appear.</summary>
+    LookingAtText,
     /// <summary>A desktop icon is very close: it looks at it.</summary>
     LookingAtIcon,
     /// <summary>A window is very close: it looks at it.</summary>
@@ -51,10 +57,15 @@ public readonly record struct BrainContext(bool Held = false, bool Carrying = fa
 ///  1. <see cref="SpiderState.Held"/> (mouse holds it)
 ///  2. <see cref="SpiderState.Carrying"/> (the carry task owns movement and looking)
 ///  3. <see cref="SpiderState.Reaching"/> (an item hovers over it)
-///  4. <see cref="SpiderState.Dropping"/> (it was just told to let go)
-///  5. <see cref="SpiderState.Startled"/> (a sudden change, for <see cref="ChangeSeconds"/>)
-///  6. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
-///  7. <see cref="SpiderState.Watching"/> (the cursor)
+///  4. <see cref="SpiderState.Leaping"/> (it was clicked and hops away)
+///  5. <see cref="SpiderState.Dropping"/> (it was just told to let go)
+///  6. <see cref="SpiderState.Startled"/> (a sudden change, for <see cref="ChangeSeconds"/>)
+///  7. <see cref="SpiderState.LookingAtText"/> (someone types close by)
+///  8. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
+///  9. <see cref="SpiderState.Watching"/> (the cursor)
+///
+/// A window that comes fast at the spider makes it hop back a little (<see cref="DodgeWindows"/>); that is a
+/// <see cref="SpiderState.Leaping"/> like any other hop.
 ///
 /// and returns where it should look, or null when something else (the mouse, the carry task) is in control.
 /// Entering a state raises <see cref="StateChanged"/>. States never need to know about each other: only this
@@ -62,13 +73,16 @@ public readonly record struct BrainContext(bool Held = false, bool Carrying = fa
 /// </summary>
 public sealed class SpiderBrain
 {
-    private enum ChangeKind { WindowOpened, WindowClosed, IconMoved, IconAdded }
+    private enum ChangeKind { WindowOpened, WindowClosed, IconMoved, IconAdded, IconRemoved }
 
     private sealed record Change(ChangeKind Kind, long Id, Vec2 LastKnown);
 
     private readonly Dictionary<long, RectD> _windowsPrev = new();
     private Dictionary<long, RectD> _windowsNow = new();
-    private readonly Dictionary<int, Vec2> _iconsPrev = new();
+    private readonly List<Vec2> _iconsPrev = new();   // centres of the icons of the previous list
+    private readonly WindowMotion _motion = new();
+    private double _clock;
+    private double _dodgeCooldown;
     private IReadOnlyList<DesktopWindow>? _windowsRef;
     private IReadOnlyList<DesktopIcon>? _iconsRef;
     private bool _windowsPrimed;
@@ -110,6 +124,30 @@ public sealed class SpiderBrain
     public bool LookAtWindows { get; set; } = true;
     public bool ReactToChanges { get; set; } = true;
 
+    /// <summary>Look at the place where someone is typing, when that is close to the spider.</summary>
+    public bool LookAtText { get; set; } = true;
+
+    /// <summary>Typing this close (body units) catches the spider's attention.</summary>
+    public double TextAttentionRadiusUnits { get; set; } = 350.0;
+
+    /// <summary>Hop back a little from a window that is coming fast at the spider.</summary>
+    public bool DodgeWindows { get; set; } = true;
+
+    /// <summary>A window must move at least this fast to be seen as coming at the spider, px/s.</summary>
+    public double DodgeMinSpeed { get; set; } = 250.0;
+
+    /// <summary>Only windows whose edge is within this distance (body units) matter.</summary>
+    public double DodgeRangeUnits { get; set; } = 40.0;
+
+    /// <summary>The window must be about to arrive within this many seconds.</summary>
+    public double DodgeLookAheadSeconds { get; set; } = 0.4;
+
+    /// <summary>Hop length per px/s of closing speed (it is kept between 18 and 55 px, so a fast window still gets there).</summary>
+    public double DodgeShove { get; set; } = 0.08;
+
+    /// <summary>Minimum time between two dodges, seconds.</summary>
+    public double DodgeCooldownSeconds { get; set; } = 1.0;
+
     // ------------------------------------------------------------------ state, for the renderer and the HUD
 
     /// <summary>The current state.</summary>
@@ -120,6 +158,9 @@ public sealed class SpiderBrain
 
     /// <summary>Raised when the state changes: (old, new).</summary>
     public event Action<SpiderState, SpiderState>? StateChanged;
+
+    /// <summary>Raised when the spider hops back from an approaching window.</summary>
+    public event Action? Dodged;
 
     /// <summary>Where the front legs should reach to (hand this to <see cref="Spider.ReachTarget"/>), or null.</summary>
     public Vec2? ReachPoint { get; private set; }
@@ -139,6 +180,7 @@ public sealed class SpiderBrain
         SpiderState.LookingAtIcon => FocusKind.Icon,
         SpiderState.LookingAtWindow => FocusKind.Window,
         SpiderState.Startled => FocusKind.Change,
+        SpiderState.LookingAtText => FocusKind.Text,
         _ => FocusKind.Cursor,
     };
 
@@ -151,7 +193,9 @@ public sealed class SpiderBrain
         SpiderState.Held => "held",
         SpiderState.Carrying => "carrying something",
         SpiderState.Reaching => "reaching for an item",
+        SpiderState.Leaping => "hopping away",
         SpiderState.Dropping => "dropped it",
+        SpiderState.LookingAtText => "text being typed",
         SpiderState.LookingAtIcon => $"icon #{Attention?.Index}",
         SpiderState.LookingAtWindow => $"window \"{AttentionWindow?.Title}\"",
         SpiderState.Startled => _change?.Kind switch
@@ -160,6 +204,7 @@ public sealed class SpiderBrain
             ChangeKind.WindowClosed => "change: window closed",
             ChangeKind.IconMoved => "change: icon moved",
             ChangeKind.IconAdded => "change: icon added",
+            ChangeKind.IconRemoved => "change: icon removed",
             _ => "change",
         },
         _ => "cursor",
@@ -195,6 +240,11 @@ public sealed class SpiderBrain
     {
         Vec2 pos = spider.Position;
         double ppu = spider.PixelsPerUnit;
+
+        _clock += dt;
+        if (_dodgeCooldown > 0.0)
+            _dodgeCooldown -= dt;
+        _motion.Update(_clock, snapshot.Windows);
 
         DetectChanges(spider, snapshot);
 
@@ -238,6 +288,11 @@ public sealed class SpiderBrain
             look = hover;
             reach = hover;
         }
+        else if (spider.IsLeaping || TryDodge(spider, snapshot))
+        {
+            next = SpiderState.Leaping;
+            look = spider.LeapLanding;
+        }
         else if (dropActive && (_dropAt - pos).Length >= MinDistance)
         {
             next = SpiderState.Dropping;
@@ -247,6 +302,11 @@ public sealed class SpiderBrain
         {
             next = SpiderState.Startled;
             look = ChangeTarget(_change, snapshot);
+        }
+        else if (TextTarget(pos, ppu, snapshot) is Vec2 textAt)
+        {
+            next = SpiderState.LookingAtText;
+            look = textAt;
         }
         else
         {
@@ -304,6 +364,57 @@ public sealed class SpiderBrain
         State = next;
         TimeInState = 0.0;
         StateChanged?.Invoke(old, next);
+    }
+
+    // ------------------------------------------------------------------ typing and approaching windows
+
+    private Vec2? TextTarget(Vec2 pos, double ppu, DesktopSnapshot snapshot)
+    {
+        if (!LookAtText || !snapshot.Typing || snapshot.Caret is not Vec2 caret)
+            return null;
+
+        double limit = TextAttentionRadiusUnits * ppu * (State == SpiderState.LookingAtText ? ReleaseFactor : 1.0);
+        double d = (caret - pos).Length;
+        return d >= MinDistance && d <= limit ? caret : null;
+    }
+
+    // A window that heads straight for the spider, fast, and is nearly there: it hops back a little. The hop is
+    // short on purpose, so a window that really is quick still catches up with it.
+    private bool TryDodge(Spider spider, DesktopSnapshot snapshot)
+    {
+        if (!DodgeWindows || _dodgeCooldown > 0.0)
+            return false;
+
+        Vec2 pos = spider.Position;
+        double range = DodgeRangeUnits * spider.PixelsPerUnit;
+
+        foreach (DesktopWindow w in snapshot.Windows)
+        {
+            if (w.Id == 0 || w.Bounds.Contains(pos))
+                continue;   // not a window, or the spider is already on it
+
+            Vec2 v = _motion.VelocityOf(w.Id, _clock);
+            double speed = v.Length;
+            if (speed < DodgeMinSpeed)
+                continue;
+
+            Vec2 away = pos - ClosestPoint(w.Bounds, pos);
+            double d = away.Length;
+            if (d < 1.0 || d > range)
+                continue;
+
+            Vec2 n = away * (1.0 / d);                  // from the window's nearest edge to the spider
+            double closing = v.X * n.X + v.Y * n.Y;     // how fast that edge approaches
+            if (closing < speed * 0.6 || d / closing > DodgeLookAheadSeconds)
+                continue;
+
+            spider.Leap(n, Math.Clamp(closing * DodgeShove, 18.0, 55.0), 0.22);
+            _dodgeCooldown = DodgeCooldownSeconds;
+            Dodged?.Invoke();
+            return true;
+        }
+
+        return false;
     }
 
     // ------------------------------------------------------------------ nearby things
@@ -395,6 +506,71 @@ public sealed class SpiderBrain
 
     // Compares this frame's lists with the previous ones. Lists are only diffed when the source handed over a new
     // instance, and the very first list is only remembered (otherwise everything would be "new" at startup).
+    // Icons have no stable identity (the index shifts when one is deleted), so they are matched by position. What
+    // stayed put is ignored. What is left over on only one side was removed or added; a leftover on both sides is
+    // an icon that moved. The change closest to the spider is the one it reacts to.
+    private void DetectIconChanges(Spider spider, IReadOnlyList<DesktopIcon> icons)
+    {
+        var gone = new List<Vec2>(_iconsPrev);
+        var fresh = new List<DesktopIcon>();
+        foreach (DesktopIcon icon in icons)
+        {
+            Vec2 centre = icon.Center;
+            int match = gone.FindIndex(c => (c - centre).Length < IconMoveThreshold);
+            if (match >= 0)
+                gone.RemoveAt(match);
+            else
+                fresh.Add(icon);
+        }
+
+        bool found = false;
+        ChangeKind bestKind = ChangeKind.IconMoved;
+        long bestId = 0;
+        Vec2 bestAt = default;
+        double bestD = double.MaxValue;
+
+        void Consider(ChangeKind kind, long id, Vec2 at)
+        {
+            double d = (at - spider.Position).Length;
+            if (d >= bestD) return;
+            found = true;
+            bestKind = kind;
+            bestId = id;
+            bestAt = at;
+            bestD = d;
+        }
+
+        foreach (DesktopIcon icon in fresh)
+        {
+            // the nearest leftover old position is where this icon came from
+            int from = -1;
+            double fromD = double.MaxValue;
+            for (int i = 0; i < gone.Count; i++)
+            {
+                double d = (gone[i] - icon.Center).Length;
+                if (d < fromD)
+                {
+                    fromD = d;
+                    from = i;
+                }
+            }
+
+            if (from >= 0)
+                gone.RemoveAt(from);
+
+            if (icon.Index == _ownIcon && _ownIconLeft > 0.0)
+                continue;   // the spider moved this one itself
+
+            Consider(from >= 0 ? ChangeKind.IconMoved : ChangeKind.IconAdded, icon.Index, icon.Center);
+        }
+
+        foreach (Vec2 spot in gone)
+            Consider(ChangeKind.IconRemoved, 0, spot);
+
+        if (found)
+            StartChange(bestKind, bestId, bestAt);
+    }
+
     private void DetectChanges(Spider spider, DesktopSnapshot snapshot)
     {
         if (!ReferenceEquals(snapshot.Windows, _windowsRef))
@@ -432,36 +608,11 @@ public sealed class SpiderBrain
             // An empty list means "icons hidden or explorer not reachable": remember it, but do not announce
             // every icon as new when they come back.
             if (_iconsPrimed && _iconsPrev.Count > 0 && icons.Count > 0)
-            {
-                DesktopIcon? changed = null;
-                ChangeKind kind = ChangeKind.IconMoved;
-                double bestD = double.MaxValue;
-
-                foreach (DesktopIcon icon in icons)
-                {
-                    if (icon.Index == _ownIcon && _ownIconLeft > 0.0)
-                        continue;   // the spider moved this one itself
-                    
-                    bool isNew = !_iconsPrev.TryGetValue(icon.Index, out Vec2 old);
-                    if (!isNew && (icon.Center - old).Length < IconMoveThreshold)
-                        continue;
-
-                    double d = (icon.Center - spider.Position).Length;
-                    if (d < bestD)
-                    {
-                        bestD = d;
-                        changed = icon;
-                        kind = isNew ? ChangeKind.IconAdded : ChangeKind.IconMoved;
-                    }
-                }
-
-                if (changed is not null)
-                    StartChange(kind, changed.Index, changed.Center);
-            }
+                DetectIconChanges(spider, icons);
 
             _iconsPrev.Clear();
             foreach (DesktopIcon icon in icons)
-                _iconsPrev[icon.Index] = icon.Center;
+                _iconsPrev.Add(icon.Center);
             _iconsPrimed = true;
         }
     }

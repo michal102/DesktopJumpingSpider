@@ -44,6 +44,37 @@ public sealed class SpiderCarry
     private bool _bringToCursor;
     private bool _cursorLeft;
     private double _quipLeft;
+    private readonly SkitterPath _skitter;
+    private readonly Random _rng;
+
+    /// <param name="rng">Source of the randomness of the walk; pass a seeded one for repeatable tests.</param>
+    public SpiderCarry(Random? rng = null)
+    {
+        _rng = rng ?? new Random();
+        _skitter = new SkitterPath(_rng);
+    }
+
+    /// <summary>Walk in short legs with sideways detours (skittering) instead of in a straight line.</summary>
+    public bool Skitter { get; set; } = true;
+
+    /// <summary>
+    /// Walk like a real spider: short fast dashes, each followed by a still moment in which it looks around
+    /// ("thinks"), now and then a longer one. Needs no <see cref="Skitter"/>, but they go well together.
+    /// </summary>
+    public bool Jerky { get; set; } = true;
+
+    /// <summary>True while the spider stands still between two dashes of a walk.</summary>
+    public bool Pausing => Phase == CarryPhase.Carry && _walk == WalkPhase.Pause;
+
+    /// <summary>The path being walked, for debug drawing.</summary>
+    public SkitterPath Path => _skitter;
+
+    /// <summary>The screen area; the detours are kept inside it.</summary>
+    public RectD? Bounds
+    {
+        get => _skitter.Bounds;
+        set => _skitter.Bounds = value;
+    }
 
     public double GrabSeconds { get; set; } = 0.35;
     public double PlaceSeconds { get; set; } = 0.45;
@@ -54,7 +85,7 @@ public sealed class SpiderCarry
     public double ArriveDistance { get; set; } = 14.0;
 
     /// <summary>Give up and set the item down wherever the spider is after this many seconds.</summary>
-    public double MaxCarrySeconds { get; set; } = 12.0;
+    public double MaxCarrySeconds { get; set; } = 25.0;
 
     /// <summary>Gift mode: how long the spider waits holding the item for the mouse to leave before it gives up.</summary>
     public double WaitForCursorSeconds { get; set; } = 6.0;
@@ -110,6 +141,7 @@ public sealed class SpiderCarry
         _quip = options.Quip ?? "";
         _quipLeft = _quip.Length > 0 ? 3.2 : 0.0;
         Pinned = false;
+        _skitter.Reset();
         _t = 0.0;
         Phase = CarryPhase.Grab;
         ItemPosition = dropPoint;
@@ -127,6 +159,7 @@ public sealed class SpiderCarry
         _bringToCursor = false;
         _disdain = false;
         Pinned = true;
+        _skitter.Reset();
         _t = 0.0;
         return true;
     }
@@ -186,6 +219,7 @@ public sealed class SpiderCarry
                 {
                     Phase = CarryPhase.Carry;
                     _t = 0.0;
+                    BeginPause(true);   // it sets off only after a moment of thought
                 }
                 return;
             }
@@ -227,8 +261,22 @@ public sealed class SpiderCarry
                     return;
                 }
 
-                spider.MoveInput = to * (CarryPace / distance);
-                spider.LookTarget = _destination;
+                // the spider walks to the next waypoint of its skittering path (the last one is the destination)
+                int waypointBefore = _skitter.NextIndex;
+                Vec2 aim = Skitter ? _skitter.Next(spider.Position, _destination) : _destination;
+                bool reached = Skitter && _skitter.NextIndex != waypointBefore;
+
+                if (Jerky)
+                {
+                    WalkStep(dt, spider, aim, reached);
+                }
+                else
+                {
+                    Vec2 toAim = aim - spider.Position;
+                    double aimDistance = toAim.Length;
+                    spider.MoveInput = aimDistance > 1e-6 ? toAim * (CarryPace / aimDistance) : Vec2.Zero;
+                    spider.LookTarget = aim;
+                }
                 ItemPosition = Mouth(spider);
                 ItemAngleDeg = spider.HeadingDeg + Sway(_t);
                 return;
@@ -266,6 +314,71 @@ public sealed class SpiderCarry
                 return;
             }
         }
+    }
+
+    // ------------------------------------------------------------------ stop-and-go walking
+
+    private enum WalkPhase { Dash, Pause }
+
+    private WalkPhase _walk = WalkPhase.Pause;
+    private double _walkT, _walkDur;
+    private double _dashPace, _dashJitter;
+    private double _glanceA, _glanceB;
+
+    // Real spiders do not glide: they dash a few body lengths, freeze, twitch their head about as if deciding,
+    // and dash again, each time with a slightly different heading and speed.
+    private void WalkStep(double dt, Spider spider, Vec2 aim, bool reachedWaypoint)
+    {
+        Vec2 to = aim - spider.Position;
+        double distance = to.Length;
+        Vec2 dir = distance > 1e-6 ? to * (1.0 / distance) : Vec2.Zero;
+        _walkT += dt;
+
+        if (_walk == WalkPhase.Dash)
+        {
+            if (_walkT >= _walkDur || reachedWaypoint)
+            {
+                // arriving at a waypoint is a good moment to stop and think
+                BeginPause(reachedWaypoint ? _rng.NextDouble() < 0.2 : _rng.NextDouble() < 0.05);
+            }
+            else
+            {
+                Vec2 heading = dir.Rotated(_dashJitter);
+                spider.MoveInput = heading * _dashPace;
+                spider.LookTarget = spider.Position + heading * 100.0;
+                return;
+            }
+        }
+
+        // standing still: first it glances to one side, then the other, and finally faces where it will go
+        spider.MoveInput = Vec2.Zero;
+        double k = _walkDur > 1e-6 ? _walkT / _walkDur : 1.0;
+        double glance = k < 0.28 ? _glanceA : k < 0.55 ? _glanceB : 0.0;
+        spider.LookTarget = spider.Position + dir.Rotated(glance) * 100.0;
+
+        if (_walkT >= _walkDur)
+            BeginDash();
+    }
+
+    private void BeginPause(bool thinking)
+    {
+        _walk = WalkPhase.Pause;
+        _walkT = 0.0;
+        _walkDur = thinking ? 0.5 + 0.5 * _rng.NextDouble() : 0.10 + 0.25 * _rng.NextDouble();
+        double reach = thinking ? 25.0 + 35.0 * _rng.NextDouble() : 8.0 + 22.0 * _rng.NextDouble();
+        // Short pauses are just a freeze. Only a long, thinking pause makes it glance aside, and only a little.
+        double side = _rng.Next(2) == 0 ? -1.0 : 1.0;
+        _glanceA = thinking ? side * (10.0 + 12.0 * _rng.NextDouble()) : 0.0;
+        _glanceB = thinking ? -side * (3.0 + 5.0 * _rng.NextDouble()) : 0.0;
+    }
+
+    private void BeginDash()
+    {
+        _walk = WalkPhase.Dash;
+        _walkT = 0.0;
+        _walkDur = 0.35 + 0.5 * _rng.NextDouble();     // 0.35–0.85 s, about half as many stops
+        _dashPace = Math.Min(1.0, CarryPace * (0.85 + 0.4 * _rng.NextDouble()));
+        _dashJitter = (_rng.NextDouble() - 0.5) * 12.0;
     }
 
     private void BeginPlace(Spider spider, Vec2 where)

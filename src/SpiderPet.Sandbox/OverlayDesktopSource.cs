@@ -93,9 +93,13 @@ public sealed class OverlayDesktopSource : IDesktopSource, IDesktopIconControl
             icons = _lastIconsOut;
         }
 
+        Vec2? caret = s.Caret is Vec2 c ? new Vec2((c.X - OriginX) / scale, (c.Y - OriginY) / scale) : null;
+
         return new DesktopSnapshot(
             new Vec2((s.Cursor.X - OriginX) / scale, (s.Cursor.Y - OriginY) / scale),
             _lastOut,
-            icons);
+            icons,
+            caret,
+            s.Typing);
     }
 }

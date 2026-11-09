@@ -273,6 +273,9 @@ public sealed class OverlayWindow : Window
         _view.Brain.LookAtIcons = _settings.LookAtIcons;
         _view.Brain.LookAtWindows = _settings.LookAtWindows;
         _view.Brain.ReactToChanges = _settings.ReactToChanges;
+        _view.Brain.LookAtText = _settings.LookAtText;
+        _view.Brain.DodgeWindows = _settings.DodgeWindows;
+        _windows.TrackTyping = _settings.LookAtText;
         _view.DropStyle = _settings.DropStyle;
         _view.HoardCorner = _settings.HoardCorner;
         _view.Spider.SteppedTurning = _settings.SteppedTurning;

@@ -127,19 +127,52 @@ public sealed class SandboxView : Control
         if (distance > GrabRadius)
             return;
 
-        // A tap on a spider that holds something makes it let go; only a real drag picks the spider up.
-        if (_carry.Busy)
-        {
-            _tapDown = true;
-            _tapStart = mouse;
-            e.Pointer.Capture(this);
-            e.Handled = true;
-            return;
-        }
-
-        BeginDrag(mouse);
+        // A press starts out as a tap. Released without moving it pokes the spider (it hops away from the mouse,
+        // or lets go of what it holds); moved further than TapSlop it picks the spider up instead.
+        _tapDown = true;
+        _tapStart = mouse;
         e.Pointer.Capture(this);
         e.Handled = true;
+    }
+
+    private int _pokes;
+    private double _lastPoke = -10.0;
+
+    // The spider was clicked: it hops away from the mouse and reacts. Poking it again and again makes it cross.
+    private void Poke(Vec2 mouse)
+    {
+        if (!_spiderVisible) return;
+
+        double now = _clock.Elapsed.TotalSeconds;
+        _pokes = now - _lastPoke < 3.0 ? _pokes + 1 : 1;
+        _lastPoke = now;
+
+        double distance = 50.0 * Spider.PixelsPerUnit;
+        Spider.Leap(PickLeapDirection(mouse, distance), distance);
+        ShowEmote(_pokes >= 3 ? "💢" : _pokes == 2 ? "💦" : "❗", 1.2);
+    }
+
+    // Away from the mouse, with a little randomness, turned aside if the landing would be off the screen.
+    private Vec2 PickLeapDirection(Vec2 mouse, double distance)
+    {
+        Vec2 from = Spider.Position;
+        Vec2 away = from - mouse;
+        away = away.Length < 2.0
+            ? new Vec2(0.0, -1.0).Rotated(_rng.NextDouble() * 360.0)
+            : away.Normalized().Rotated((_rng.NextDouble() - 0.5) * 24.0);
+
+        double sign = _rng.Next(2) == 0 ? 1.0 : -1.0;
+        const double margin = 40.0;
+        foreach (double turn in new[] { 0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0, 135.0, -135.0, 180.0 })
+        {
+            Vec2 dir = away.Rotated(turn * sign);
+            Vec2 land = from + dir * distance;
+            if (land.X >= margin && land.X <= Bounds.Width - margin && land.Y >= margin && land.Y <= Bounds.Height - margin)
+                return dir;
+        }
+
+        var centre = new Vec2(Bounds.Width / 2.0, Bounds.Height / 2.0);
+        return (centre - from).Length < 1.0 ? away : (centre - from).Normalized();
     }
 
     private Vec2 _lastCursor;
@@ -152,6 +185,7 @@ public sealed class SandboxView : Control
     {
         _isDragging = true;
         Spider.IsGrabbed = true;
+        Spider.CancelLeap();
 
 // Stop the spider from turning towards the cursor while held.
         Spider.LookTarget = null;
@@ -228,6 +262,10 @@ public sealed class SandboxView : Control
                 _brain.NotifyDropped(_carry.ItemPosition);
                 ShowEmote("💦", 1.4);
             }
+            else
+            {
+                Poke(_tapStart);
+            }
             return;
         }
 
@@ -267,6 +305,7 @@ public sealed class SandboxView : Control
             if (now == SpiderState.Startled) ShowEmote("❗", 1.0);
             else if (now == SpiderState.Reaching) ShowEmote("✨", 1.4);
         };
+        _brain.Dodged += () => ShowEmote("💦", 1.0);
 
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(8), DispatcherPriority.Render, OnTick);
     }
@@ -450,6 +489,7 @@ public sealed class SandboxView : Control
 
         if (_isDragging && _carry.Busy)
             _carry.Cancel();
+        _carry.Bounds = new RectD(0, 0, Bounds.Width, Bounds.Height);
         _carry.Update(dt, Spider, _watcher.Current.Cursor);
 
         Spider.Update(dt);
@@ -687,7 +727,7 @@ public sealed class SandboxView : Control
             if (ShowIconMarks || ShowDebug)
                 DrawFocus(context);
 
-            if (_spiderVisible) { DrawGlow(context); SpiderRenderer.Draw(context, Spider); }
+            if (_spiderVisible) DrawSpider(context);
             DrawCarriedItem(context);
             DrawHoverItem(context);
             return;
@@ -722,8 +762,7 @@ public sealed class SandboxView : Control
             );
         }
 
-        DrawGlow(context);
-        SpiderRenderer.Draw(context, Spider);
+        DrawSpider(context);
         DrawCarriedItem(context);
         DrawHoverItem(context);
 
@@ -876,6 +915,28 @@ public sealed class SandboxView : Control
         using (context.PushOpacity(alpha))
         using (context.PushTransform(Matrix.CreateScale(pop, pop) * Matrix.CreateTranslation(at.X, at.Y)))
             context.DrawText(_emoteText, new Point(-w / 2.0, -h / 2.0));
+    }
+
+    // The spider itself. While it leaps it is "in the air": it swells, rises a little and leaves a shadow on the ground.
+    private void DrawSpider(DrawingContext context)
+    {
+        double arc = Spider.LeapArc;
+        if (arc <= 0.001)
+        {
+            DrawGlow(context);
+            SpiderRenderer.Draw(context, Spider);
+            return;
+        }
+
+        Vec2 p = Spider.Position;
+        double u = Spider.PixelsPerUnit;
+        using (context.PushOpacity(0.35 * (1.0 - 0.4 * arc)))
+            context.DrawEllipse(Brushes.Black, null, new Point(p.X, p.Y + u), 7.0 * u * (1.0 - 0.2 * arc), 4.5 * u * (1.0 - 0.2 * arc));
+
+        double s = 1.0 + 0.28 * arc;
+        using (context.PushTransform(
+                   Matrix.CreateTranslation(-p.X, -p.Y) * Matrix.CreateScale(s, s) * Matrix.CreateTranslation(p.X, p.Y - 6.0 * u * arc)))
+            SpiderRenderer.Draw(context, Spider);
     }
 
     private void DrawGlow(DrawingContext context)

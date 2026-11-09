@@ -19,6 +19,20 @@ internal struct RECT
     public int Bottom;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct GUITHREADINFO
+{
+    public uint cbSize;
+    public uint flags;
+    public IntPtr hwndActive;
+    public IntPtr hwndFocus;
+    public IntPtr hwndCapture;
+    public IntPtr hwndMenuOwner;
+    public IntPtr hwndMoveSize;
+    public IntPtr hwndCaret;
+    public RECT rcCaret;
+}
+
 internal static class NativeMethods
 {
     public const int GWL_EXSTYLE = -20;
@@ -105,6 +119,12 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
 
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessageTimeout(

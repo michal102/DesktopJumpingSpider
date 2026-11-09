@@ -26,10 +26,14 @@ public sealed record DesktopIcon(int Index, RectD Bounds)
 /// <param name="Cursor">Real mouse position.</param>
 /// <param name="Windows">Visible top-level windows, <b>frontmost first</b> (z-order).</param>
 /// <param name="Icons">Desktop icons, or null when the source does not know about them.</param>
+/// <param name="Caret">Where the text caret is (centre), or null when unknown. Only meaningful while <paramref name="Typing"/>.</param>
+/// <param name="Typing">Someone has typed within the last moment. The source reports only that keys are being pressed, never which.</param>
 public sealed record DesktopSnapshot(
     Vec2 Cursor,
     IReadOnlyList<DesktopWindow> Windows,
-    IReadOnlyList<DesktopIcon>? Icons = null);
+    IReadOnlyList<DesktopIcon>? Icons = null,
+    Vec2? Caret = null,
+    bool Typing = false);
 
 /// <summary>
 /// The only thing the pet will ever need to know about the outside world.

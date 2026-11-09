@@ -21,7 +21,9 @@ public sealed class SettingsWindow : Window
     // Behavior
     private readonly CheckBox _lookIcons = new() { Content = "Look at nearby desktop icons" };
     private readonly CheckBox _lookWindows = new() { Content = "Look at nearby windows" };
-    private readonly CheckBox _reactChanges = new() { Content = "React to sudden changes (new window, moved icon)" };
+    private readonly CheckBox _reactChanges = new() { Content = "React to sudden changes (new window, moved or deleted icon)" };
+    private readonly CheckBox _lookText = new() { Content = "Watch the text when you type close to it" };
+    private readonly CheckBox _dodge = new() { Content = "Hop back from windows that come fast at it" };
     private readonly CheckBox _stepped = new() { Content = "Stepped turning (big turns are split into a few steps)" };
     private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
     private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200 };
@@ -71,7 +73,7 @@ public sealed class SettingsWindow : Window
             WindowTransparencyLevel.Blur,
         };
 
-        AddPage("Behavior", _lookIcons, _lookWindows, _reactChanges, _stepped, _pilot,
+        AddPage("Behavior", _lookIcons, _lookWindows, _lookText, _reactChanges, _dodge, _stepped, _pilot,
             Label("Walking speed"), _speed, _speedLabel);
         AddPage("Drops", Note("What happens when you drop a file onto the spider:"),
             _dropStyle,
@@ -120,6 +122,8 @@ public sealed class SettingsWindow : Window
         Wire(_lookIcons, v => _settings.LookAtIcons = v);
         Wire(_lookWindows, v => _settings.LookAtWindows = v);
         Wire(_reactChanges, v => _settings.ReactToChanges = v);
+        Wire(_lookText, v => _settings.LookAtText = v);
+        Wire(_dodge, v => _settings.DodgeWindows = v);
         Wire(_stepped, v => _settings.SteppedTurning = v);
         Wire(_pilot, v => _settings.PilotMode = v);
         Wire(_spider, v => _settings.ShowSpider = v);
@@ -248,6 +252,8 @@ public sealed class SettingsWindow : Window
         _lookIcons.IsChecked = _settings.LookAtIcons;
         _lookWindows.IsChecked = _settings.LookAtWindows;
         _reactChanges.IsChecked = _settings.ReactToChanges;
+        _lookText.IsChecked = _settings.LookAtText;
+        _dodge.IsChecked = _settings.DodgeWindows;
         _stepped.IsChecked = _settings.SteppedTurning;
         _pilot.IsChecked = _settings.PilotMode;
         _speed.Value = _settings.BaseSpeed;
