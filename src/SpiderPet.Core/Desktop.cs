@@ -28,12 +28,16 @@ public sealed record DesktopIcon(int Index, RectD Bounds)
 /// <param name="Icons">Desktop icons, or null when the source does not know about them.</param>
 /// <param name="Caret">Where the text caret is (centre), or null when unknown. Only meaningful while <paramref name="Typing"/>.</param>
 /// <param name="Typing">Someone has typed within the last moment. The source reports only that keys are being pressed, never which.</param>
+/// <param name="LeftDown">The left mouse button is down right now (anywhere, not only on the spider).</param>
+/// <param name="IdleSeconds">Seconds since the user last touched the mouse or keyboard (anywhere), or null when the source cannot tell.</param>
 public sealed record DesktopSnapshot(
     Vec2 Cursor,
     IReadOnlyList<DesktopWindow> Windows,
     IReadOnlyList<DesktopIcon>? Icons = null,
     Vec2? Caret = null,
-    bool Typing = false);
+    bool Typing = false,
+    double? IdleSeconds = null,
+    bool LeftDown = false);
 
 /// <summary>
 /// The only thing the pet will ever need to know about the outside world.

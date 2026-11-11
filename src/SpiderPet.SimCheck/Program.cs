@@ -45,6 +45,7 @@ RunDropFeatureChecks();
 RunStateChecks();
 RunPokeAndSkitterChecks();
 RunDeleteTypeDodgeChecks();
+RunWanderChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -614,6 +615,188 @@ void RunCarryChecks()
         avoids &= !win.Bounds.Contains(d);
     }
     Check("a spider on the bare desktop does not carry things into a window", avoids);
+}
+
+void RunWanderChecks()
+{
+    Console.WriteLine();
+    Console.WriteLine("== wandering ==");
+    const double dt = 1.0 / 120.0;
+    var area = new RectD(0, 0, 1000, 800);
+
+    // on the bare desktop, with one window
+    var win = new DesktopWindow("w", new RectD(600, 150, 300, 400), 1);
+    var snap = new DesktopSnapshot(new Vec2(500, 400), new List<DesktopWindow> { win });
+    var spider = new Spider(new Vec2(300, 400));
+    for (int i = 0; i < 60; i++) spider.Update(dt);
+    var wanderer = new SpiderWanderer(new Random(11));
+
+    double minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    bool nan = false, enteredWindow = false;
+    int walkFrames = 0, restFrames = 0, walks = 0, lateFrames = 0, nearEdgeFrames = 0;
+    bool wasWalking = false;
+    double travelled = 0.0;
+    Vec2 last = spider.Position;
+    for (int i = 0; i < 120 * 120; i++)   // two minutes
+    {
+        wanderer.Update(dt, spider, snap, area);
+        spider.Update(dt);
+        Vec2 p = spider.Position;
+        nan |= double.IsNaN(p.X) || double.IsNaN(p.Y);
+        minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+        minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+        enteredWindow |= win.Bounds.Contains(p);
+        travelled += (p - last).Length;
+        last = p;
+        if (i > 120 * 25)
+        {
+            lateFrames++;
+            double toScreen = Math.Min(Math.Min(p.X, 1000 - p.X), Math.Min(p.Y, 800 - p.Y));
+            double dxw = Math.Max(Math.Max(win.Bounds.X - p.X, 0.0), p.X - win.Bounds.Right);
+            double dyw = Math.Max(Math.Max(win.Bounds.Y - p.Y, 0.0), p.Y - win.Bounds.Bottom);
+            double toWin = Math.Sqrt(dxw * dxw + dyw * dyw);
+            if (toScreen < 160.0 || toWin < 110.0) nearEdgeFrames++;
+        }
+        if (wanderer.Walking) walkFrames++; else restFrames++;
+        if (wanderer.Walking && !wasWalking) walks++;
+        wasWalking = wanderer.Walking;
+    }
+    Check("wandering never produces NaN", !nan);
+    Check("it walks and it rests", walkFrames > 120 * 10 && restFrames > 120 * 10);
+    Check("it makes many separate walks in two minutes", walks >= 8);
+    Check("it actually covers ground", travelled > 600.0);
+    Check("it stays on the bare desktop and does not stroll into the window", !enteredWindow);
+    Check("it stays inside the screen", minX > -1 && maxX < 1001 && minY > -1 && maxY < 801);
+    Check("after the first seconds it spends most of its time near an edge of the screen or of the window", nearEdgeFrames > 0.5 * lateFrames);
+
+    // goals are at most the maximum turn away from the heading
+    var turnSpider = new Spider(new Vec2(400, 400));
+    for (int i = 0; i < 60; i++) turnSpider.Update(dt);
+    var open = new DesktopSnapshot(new Vec2(0, 0), new List<DesktopWindow>());
+    int small = 0, total = 0;
+    for (int n = 0; n < 300; n++)
+    {
+        var w = new SpiderWanderer(new Random(100 + n)) ;
+        w.Interrupt();
+        for (int i = 0; i < 120 * 12 && !w.Walking; i++) w.Update(dt, turnSpider, open, area);
+        if (!w.Walking) continue;
+        Vec2 d = w.Goal - turnSpider.Position;
+        double heading = turnSpider.HeadingDeg * Math.PI / 180.0;
+        double dot = (d.X * Math.Sin(heading) + d.Y * -Math.Cos(heading)) / Math.Max(1e-9, d.Length);
+        double ang = Math.Acos(Math.Clamp(dot, -1.0, 1.0)) * 180.0 / Math.PI;
+        total++;
+        if (ang <= 111.0) small++;
+    }
+    Check("goals are chosen", total > 250);
+    Check("goals stay within the deliberate-turn limit", small == total);
+
+    // a spider standing on a window stays on that window
+    var big = new DesktopWindow("big", new RectD(200, 100, 600, 500), 2);
+    var onWin = new DesktopSnapshot(new Vec2(0, 0), new List<DesktopWindow> { big });
+    var rider = new Spider(new Vec2(500, 350));
+    for (int i = 0; i < 60; i++) rider.Update(dt);
+    var wanderer2 = new SpiderWanderer(new Random(5));
+    bool left = false;
+    for (int i = 0; i < 120 * 90; i++)
+    {
+        wanderer2.Update(dt, rider, onWin, area);
+        rider.Update(dt);
+        left |= !big.Bounds.Contains(rider.Position);
+    }
+    Check("a spider on a window keeps to that window", !left);
+
+    // the brain hands over to the wanderer only when nothing more important happens
+    var brain = new SpiderBrain();
+    var b = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) b.Update(dt);
+    var quiet = new DesktopSnapshot(new Vec2(100, 100), new List<DesktopWindow>());
+    Vec2? look = brain.Think(dt, b, quiet, new BrainContext(Wandering: true));
+    Check("with wandering allowed the brain enters the wandering state and leaves looking to the wanderer",
+        brain.State == SpiderState.Wandering && look is null);
+    brain.Think(dt, b, quiet, new BrainContext(Carrying: true, Wandering: true));
+    Check("carrying beats wandering", brain.State == SpiderState.Carrying);
+    brain.Think(dt, b, quiet, new BrainContext(HoverPoint: new Vec2(520, 500), Wandering: true));
+    Check("reaching for a dragged item beats wandering", brain.State == SpiderState.Reaching);
+    brain.Think(dt, b, quiet, default);
+    Check("without permission it goes back to watching the cursor", brain.State == SpiderState.Watching);
+
+    // something worth a glance while wandering
+    var iconSnap = new DesktopSnapshot(new Vec2(100, 100), new List<DesktopWindow>(),
+        new List<DesktopIcon> { new DesktopIcon(0, new RectD(536, 476, 48, 48)) });
+    brain.Think(dt, b, iconSnap, new BrainContext(Wandering: true));
+    Check("while wandering the brain points out a nearby icon", brain.State == SpiderState.Wandering
+        && brain.WanderInterest is Vec2 wi && Math.Abs(wi.X - 560) < 1 && Math.Abs(wi.Y - 500) < 1);
+    brain.Think(dt, b, quiet, new BrainContext(Wandering: true));
+    Check("and nothing when there is none", brain.WanderInterest is null);
+
+    // few icons: it walks round them
+    var icons = new List<DesktopIcon>();
+    for (int cx = 0; cx < 4; cx++)
+        for (int cy = 0; cy < 3; cy++)
+            icons.Add(new DesktopIcon(cx * 3 + cy, new RectD(350 + cx * 100, 300 + cy * 100, 48, 48)));
+    var iconWorld = new DesktopSnapshot(new Vec2(0, 0), new List<DesktopWindow>(), icons);
+    var walker = new Spider(new Vec2(150, 400));
+    for (int i = 0; i < 60; i++) walker.Update(dt);
+    var w4 = new SpiderWanderer(new Random(21)) { AvoidIcons = true };
+    bool onIcon = false;
+    for (int i = 0; i < 120 * 90; i++)
+    {
+        w4.Update(dt, walker, iconWorld, area);
+        walker.Update(dt);
+        foreach (DesktopIcon ic in icons)
+            onIcon |= ic.Bounds.Contains(walker.Position);
+    }
+    Check("with few icons it never steps on one", !onIcon);
+
+    // waving and calling it over
+    var wave = new WaveDetector();
+    bool waved = false;
+    for (int i = 0; i < 120; i++)
+        waved |= wave.Update(i * dt, new Vec2(500 + 40 * Math.Sin(2 * Math.PI * 3 * i * dt), 400));
+    Check("a mouse waved back and forth is recognised", waved);
+    var slide = new WaveDetector();
+    bool slid = false;
+    for (int i = 0; i < 240; i++)
+        slid |= slide.Update(i * dt, new Vec2(100 + i * 3, 400));
+    Check("a mouse that just moves across is not a wave", !slid);
+
+    var pal = new SpiderBrain();
+    var palSpider = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) palSpider.Update(dt);
+    Vec2? called = null;
+    pal.CalledOver += g => called = g;
+    double clock = 0.0;
+    for (int i = 0; i < 120; i++)
+    {
+        clock += dt;
+        var cur = new Vec2(560 + 40 * Math.Sin(2 * Math.PI * 3 * clock), 500);
+        pal.Think(dt, palSpider, new DesktopSnapshot(cur, new List<DesktopWindow>()), default);
+    }
+    Check("waving near the spider makes it watch the cursor", pal.State == SpiderState.LookingAtCursor);
+
+    Vec2 far = new(900, 500);
+    bool[] presses = { true, false, false, false, false, false, true, false };
+    foreach (bool down in presses)
+    {
+        for (int k = 0; k < 6; k++)
+        {
+            pal.Think(dt, palSpider, new DesktopSnapshot(far, new List<DesktopWindow>(), LeftDown: down), default);
+        }
+    }
+    Check("a double click while it watches the cursor calls it over", called is Vec2 g2 && (g2 - far).Length <= 71 && pal.State == SpiderState.Approaching);
+    pal.EndApproach();
+    pal.Think(dt, palSpider, new DesktopSnapshot(far, new List<DesktopWindow>()), default);
+    Check("when it has arrived it keeps watching the cursor", pal.State == SpiderState.LookingAtCursor);
+
+    var calm = new SpiderBrain();
+    Vec2? stray = null;
+    calm.CalledOver += g => stray = g;
+    for (int k = 0; k < 4; k++)
+    {
+        calm.Think(dt, palSpider, new DesktopSnapshot(far, new List<DesktopWindow>(), LeftDown: true), default);
+        calm.Think(dt, palSpider, new DesktopSnapshot(far, new List<DesktopWindow>(), LeftDown: false), default);
+    }
+    Check("a double click when it was not watching the cursor does nothing", stray is null);
 }
 
 sealed class ScriptedSource : IDesktopSource

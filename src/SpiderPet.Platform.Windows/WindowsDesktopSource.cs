@@ -105,10 +105,21 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
 
         bool typing = TrackTyping && _typing.Update();
         Vec2? caret = null;
-        if (typing && TypingWatcher.TryGetCaret(out Vec2 caretAt))
+        if (typing && _typing.TryGetCaret(out Vec2 caretAt))
             caret = caretAt;
 
-        return new DesktopSnapshot(new Vec2(cursor.X, cursor.Y), _windows, _icons, caret, typing && caret is not null);
+        return new DesktopSnapshot(new Vec2(cursor.X, cursor.Y), _windows, _icons, caret, typing && caret is not null, IdleSeconds(),
+            (NativeMethods.GetAsyncKeyState(0x01) & 0x8000) != 0);
+    }
+
+    /// <summary>Seconds since the last key or mouse input anywhere on the system, or null if Windows will not say.</summary>
+    private static double? IdleSeconds()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!NativeMethods.GetLastInputInfo(ref info))
+            return null;
+        uint elapsed = unchecked((uint)Environment.TickCount - info.dwTime);
+        return elapsed / 1000.0;
     }
 
     // Between full scans only the rectangles are re-read. Without this a dragged window would be sampled at the

@@ -25,6 +25,9 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _lookText = new() { Content = "Watch the text when you type close to it" };
     private readonly CheckBox _dodge = new() { Content = "Hop back from windows that come fast at it" };
     private readonly CheckBox _stepped = new() { Content = "Stepped turning (big turns are split into a few steps)" };
+    private readonly CheckBox _wander = new() { Content = "Walk around on its own (paused while pilot mode is on)" };
+    private readonly CheckBox _avoidIcons = new() { Content = "Walk round desktop icons instead of over them (when there are few)" };
+    private readonly CheckBox _cursorPlay = new() { Content = "Watch the mouse when you wave it near; double-click to call it over" };
     private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
     private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200 };
     private readonly TextBlock _speedLabel = new();
@@ -73,7 +76,7 @@ public sealed class SettingsWindow : Window
             WindowTransparencyLevel.Blur,
         };
 
-        AddPage("Behavior", _lookIcons, _lookWindows, _lookText, _reactChanges, _dodge, _stepped, _pilot,
+        AddPage("Behavior", _lookIcons, _lookWindows, _lookText, _reactChanges, _dodge, _stepped, _wander, _avoidIcons, _cursorPlay, _pilot,
             Label("Walking speed"), _speed, _speedLabel);
         AddPage("Drops", Note("What happens when you drop a file onto the spider:"),
             _dropStyle,
@@ -125,6 +128,9 @@ public sealed class SettingsWindow : Window
         Wire(_lookText, v => _settings.LookAtText = v);
         Wire(_dodge, v => _settings.DodgeWindows = v);
         Wire(_stepped, v => _settings.SteppedTurning = v);
+        Wire(_wander, v => _settings.WanderAround = v);
+        Wire(_avoidIcons, v => _settings.AvoidIcons = v);
+        Wire(_cursorPlay, v => _settings.CursorInteraction = v);
         Wire(_pilot, v => _settings.PilotMode = v);
         Wire(_spider, v => _settings.ShowSpider = v);
         Wire(_glow, v => _settings.ShowGlow = v);
@@ -255,6 +261,9 @@ public sealed class SettingsWindow : Window
         _lookText.IsChecked = _settings.LookAtText;
         _dodge.IsChecked = _settings.DodgeWindows;
         _stepped.IsChecked = _settings.SteppedTurning;
+        _wander.IsChecked = _settings.WanderAround;
+        _avoidIcons.IsChecked = _settings.AvoidIcons;
+        _cursorPlay.IsChecked = _settings.CursorInteraction;
         _pilot.IsChecked = _settings.PilotMode;
         _speed.Value = _settings.BaseSpeed;
         _speedLabel.Text = $"{_settings.BaseSpeed:0} px/s";

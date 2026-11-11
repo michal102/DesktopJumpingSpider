@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using SpiderPet.Core;
 using SpiderPet.Platform.Windows;
 
@@ -56,7 +57,8 @@ public sealed class OverlayWindow : Window
     private bool _plusHeld;
     private bool _minusHeld;
     private bool _up, _down, _left, _right, _sprint;
-    private double _topmostTimer;
+    private long _topmostAt;
+    private IntPtr _lastForeground;
     private int _frames;
     
     private const int VkF10 = 0x79;
@@ -196,11 +198,19 @@ public sealed class OverlayWindow : Window
 
         UpdateClickThrough();
 
-        _topmostTimer += 0.008;
-        if (_topmostTimer >= 1.0 && _hwnd != IntPtr.Zero)
+        // Whatever window just came to the front (the settings window, a menu, another topmost window) ends up above
+        // the overlay, so put the overlay back on top at once when the focus moves, and now and then regardless.
+        // (Counted in real time: a frame counter ran slow under load and left the spider hidden for seconds.)
+        if (_hwnd != IntPtr.Zero)
         {
-            _topmostTimer = 0.0;
-            WindowsOverlay.KeepTopmost(_hwnd);
+            IntPtr foreground = WindowsOverlay.GetForeground();
+            long tick = Environment.TickCount64;
+            if (foreground != _lastForeground || tick - _topmostAt >= 250)
+            {
+                _lastForeground = foreground;
+                _topmostAt = tick;
+                WindowsOverlay.KeepTopmost(_hwnd);
+            }
         }
     }
 
@@ -279,7 +289,10 @@ public sealed class OverlayWindow : Window
         _view.DropStyle = _settings.DropStyle;
         _view.HoardCorner = _settings.HoardCorner;
         _view.Spider.SteppedTurning = _settings.SteppedTurning;
-        _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons;
+        _view.WanderEnabled = _settings.WanderAround && !_settings.PilotMode;   // piloting it yourself stops it moving on its own
+        _view.Wanderer.AvoidIcons = _settings.AvoidIcons;
+        _view.Brain.ReactToCursor = _settings.CursorInteraction;
+        _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons || (_settings.WanderAround && _settings.AvoidIcons);
         
         if (_spiderItem is not null) _spiderItem.Header = SpiderHeader();
 
@@ -367,15 +380,30 @@ public sealed class OverlayWindow : Window
 
     private void OpenSettings()
     {
-        if (_settingsWindow is not null)
+        if (_settingsWindow is null)
         {
-            _settingsWindow.Activate();
-            return;
+            _settingsWindow = new SettingsWindow(_settings, Quit);
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         }
 
-        _settingsWindow = new SettingsWindow(_settings, Quit);
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-        _settingsWindow.Show();
+        SettingsWindow window = _settingsWindow;
+        BringToFront(window);
+
+        // A tray menu is still closing at this moment and may take the focus back, so ask once more afterwards.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (ReferenceEquals(_settingsWindow, window))
+                BringToFront(window);
+        }, DispatcherPriority.Background);
+    }
+
+    private static void BringToFront(Window window)
+    {
+        if (!window.IsVisible)
+            window.Show();
+        if (window.WindowState == WindowState.Minimized)
+            window.WindowState = WindowState.Normal;   // un-minimise
+        window.Activate();
     }
 
     // Shutdown() rather than Close(): an open settings window would otherwise keep the process alive.

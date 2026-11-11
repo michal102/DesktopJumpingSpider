@@ -33,8 +33,14 @@ public enum SpiderState
     Dropping,
     /// <summary>Something suddenly changed on the desktop (window opened/closed, icon moved): it stares at it.</summary>
     Startled,
+    /// <summary>It was called over with a double click and walks to the mouse cursor.</summary>
+    Approaching,
+    /// <summary>The mouse was waved near it: it follows the cursor with its eyes for a while.</summary>
+    LookingAtCursor,
     /// <summary>Someone is typing close to the spider: it watches the text appear.</summary>
     LookingAtText,
+    /// <summary>Nothing needs its attention and it is allowed to roam: it walks around on its own (see <see cref="SpiderWanderer"/>).</summary>
+    Wandering,
     /// <summary>A desktop icon is very close: it looks at it.</summary>
     LookingAtIcon,
     /// <summary>A window is very close: it looks at it.</summary>
@@ -47,7 +53,8 @@ public enum SpiderState
 /// <param name="Held">The user is holding the spider with the mouse.</param>
 /// <param name="Carrying">The carry task is busy (<see cref="SpiderCarry.Busy"/>).</param>
 /// <param name="HoverPoint">Where an item that is dragged over the spider currently is, or null when there is none.</param>
-public readonly record struct BrainContext(bool Held = false, bool Carrying = false, Vec2? HoverPoint = null);
+/// <param name="Wandering">The spider may walk around on its own (the setting is on and nobody is piloting it).</param>
+public readonly record struct BrainContext(bool Held = false, bool Carrying = false, Vec2? HoverPoint = null, bool Wandering = false);
 
 /// <summary>
 /// The spider's decision layer, a small state machine (<see cref="SpiderState"/>).
@@ -60,9 +67,12 @@ public readonly record struct BrainContext(bool Held = false, bool Carrying = fa
 ///  4. <see cref="SpiderState.Leaping"/> (it was clicked and hops away)
 ///  5. <see cref="SpiderState.Dropping"/> (it was just told to let go)
 ///  6. <see cref="SpiderState.Startled"/> (a sudden change, for <see cref="ChangeSeconds"/>)
-///  7. <see cref="SpiderState.LookingAtText"/> (someone types close by)
-///  8. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
-///  9. <see cref="SpiderState.Watching"/> (the cursor)
+///  7. <see cref="SpiderState.Approaching"/> (called over with a double click)
+///  8. <see cref="SpiderState.LookingAtCursor"/> (the mouse was waved near it)
+///  9. <see cref="SpiderState.LookingAtText"/> (someone types close by)
+/// 10. <see cref="SpiderState.Wandering"/> (it may roam, and nothing above needs it; see <see cref="WanderInterest"/>)
+/// 11. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
+/// 12. <see cref="SpiderState.Watching"/> (the cursor)
 ///
 /// A window that comes fast at the spider makes it hop back a little (<see cref="DodgeWindows"/>); that is a
 /// <see cref="SpiderState.Leaping"/> like any other hop.
@@ -90,6 +100,14 @@ public sealed class SpiderBrain
 
     private Change? _change;
     private double _changeLeft;
+
+    private readonly WaveDetector _wave = new();
+    private double _cursorLeft;
+    private double _approachLeft;
+    private Vec2 _prevCursor;
+    private bool _leftWasDown;
+    private double _lastPressAt = double.NegativeInfinity;
+    private Vec2 _lastPressPos;
 
     private double _dropLeft;
     private Vec2 _dropAt;
@@ -130,6 +148,27 @@ public sealed class SpiderBrain
     /// <summary>Typing this close (body units) catches the spider's attention.</summary>
     public double TextAttentionRadiusUnits { get; set; } = 350.0;
 
+    /// <summary>Notice a waving mouse, and come over when called with a double click while watching it.</summary>
+    public bool ReactToCursor { get; set; } = true;
+
+    /// <summary>The mouse must be this close (body units) to be noticed waving.</summary>
+    public double WaveRadiusUnits { get; set; } = 100.0;
+
+    /// <summary>How long it follows the cursor after a wave, seconds (moving the mouse near it keeps it going).</summary>
+    public double CursorAttentionSeconds { get; set; } = 6.0;
+
+    /// <summary>Two presses within this many seconds (and 40 px) make a double click.</summary>
+    public double DoubleClickSeconds { get; set; } = 0.45;
+
+    /// <summary>A called spider stops this many pixels short of the cursor.</summary>
+    public double ApproachGapPx { get; set; } = 70.0;
+
+    /// <summary>It does not come over from closer than this (px).</summary>
+    public double ApproachMinDistancePx { get; set; } = 110.0;
+
+    /// <summary>It gives up the walk to the cursor after this many seconds.</summary>
+    public double ApproachSeconds { get; set; } = 10.0;
+
     /// <summary>Hop back a little from a window that is coming fast at the spider.</summary>
     public bool DodgeWindows { get; set; } = true;
 
@@ -161,6 +200,23 @@ public sealed class SpiderBrain
 
     /// <summary>Raised when the spider hops back from an approaching window.</summary>
     public event Action? Dodged;
+
+    /// <summary>Raised when a double click calls the spider over; the argument is where it should walk to.</summary>
+    public event Action<Vec2>? CalledOver;
+
+    /// <summary>
+    /// While <see cref="SpiderState.Wandering"/>: a desktop icon or window close to the spider that it may glance at
+    /// when it stops, or null.
+    /// </summary>
+    public Vec2? WanderInterest { get; private set; }
+
+    /// <summary>The host calls this when the walk to the cursor is over: the spider then keeps watching the cursor for a while.</summary>
+    public void EndApproach()
+    {
+        if (_approachLeft <= 0.0) return;
+        _approachLeft = 0.0;
+        _cursorLeft = CursorAttentionSeconds;
+    }
 
     /// <summary>Where the front legs should reach to (hand this to <see cref="Spider.ReachTarget"/>), or null.</summary>
     public Vec2? ReachPoint { get; private set; }
@@ -196,6 +252,9 @@ public sealed class SpiderBrain
         SpiderState.Leaping => "hopping away",
         SpiderState.Dropping => "dropped it",
         SpiderState.LookingAtText => "text being typed",
+        SpiderState.Approaching => "coming to the cursor",
+        SpiderState.LookingAtCursor => "watching the waving mouse",
+        SpiderState.Wandering => "wandering",
         SpiderState.LookingAtIcon => $"icon #{Attention?.Index}",
         SpiderState.LookingAtWindow => $"window \"{AttentionWindow?.Title}\"",
         SpiderState.Startled => _change?.Kind switch
@@ -269,6 +328,62 @@ public sealed class SpiderBrain
         if (dropActive)
             _dropLeft -= dt;
 
+        // ---- the mouse: a wave makes it look, a double click while it looks calls it over
+        bool pressed = snapshot.LeftDown && !_leftWasDown;
+        _leftWasDown = snapshot.LeftDown;
+        bool doubleClick = false;
+        if (pressed)
+        {
+            if (_clock - _lastPressAt <= DoubleClickSeconds && (snapshot.Cursor - _lastPressPos).Length <= 40.0)
+            {
+                doubleClick = true;
+                _lastPressAt = double.NegativeInfinity;
+            }
+            else
+            {
+                _lastPressAt = _clock;
+                _lastPressPos = snapshot.Cursor;
+            }
+        }
+
+        if (_cursorLeft > 0.0) _cursorLeft -= dt;
+        if (_approachLeft > 0.0) _approachLeft -= dt;
+        WanderInterest = null;
+
+        if (!ReactToCursor)
+        {
+            _cursorLeft = 0.0;
+            _approachLeft = 0.0;
+        }
+        else
+        {
+            double cursorDistance = (snapshot.Cursor - pos).Length;
+            double radius = WaveRadiusUnits * ppu;
+            if (cursorDistance <= radius)
+            {
+                if (_wave.Update(_clock, snapshot.Cursor))
+                    _cursorLeft = CursorAttentionSeconds;
+                else if (_cursorLeft > 0.0 && (snapshot.Cursor - _prevCursor).Length > 2.0)
+                    _cursorLeft = Math.Max(_cursorLeft, 2.0);   // still moving it about: keep watching
+            }
+            else
+            {
+                _wave.Reset();
+                if (cursorDistance > radius * 1.6)
+                    _cursorLeft = 0.0;
+            }
+
+            if (doubleClick && State == SpiderState.LookingAtCursor && cursorDistance >= ApproachMinDistancePx)
+            {
+                Vec2 away = (pos - snapshot.Cursor).Normalized();
+                Vec2 goal = snapshot.Cursor + away * ApproachGapPx;
+                _approachLeft = ApproachSeconds;
+                _cursorLeft = 0.0;
+                CalledOver?.Invoke(goal);
+            }
+        }
+        _prevCursor = snapshot.Cursor;
+
         // ---- the priority list: the first state that applies wins
         SpiderState next;
         Vec2? look = null;
@@ -303,10 +418,31 @@ public sealed class SpiderBrain
             next = SpiderState.Startled;
             look = ChangeTarget(_change, snapshot);
         }
+        else if (_approachLeft > 0.0)
+        {
+            next = SpiderState.Approaching;   // the walk itself belongs to the wanderer
+        }
+        else if (_cursorLeft > 0.0)
+        {
+            next = SpiderState.LookingAtCursor;
+            look = snapshot.Cursor;
+        }
         else if (TextTarget(pos, ppu, snapshot) is Vec2 textAt)
         {
             next = SpiderState.LookingAtText;
             look = textAt;
+        }
+        else if (ctx.Wandering)
+        {
+            // the wanderer decides where to look and where to walk; it only needs to know what is worth a glance
+            next = SpiderState.Wandering;
+
+            DesktopIcon? interestIcon = LookAtIcons && OnDesktop ? NearestIcon(pos, ppu, snapshot.Icons) : null;
+            DesktopWindow? interestWindow = LookAtWindows ? NearestWindow(pos, ppu, snapshot.Windows) : null;
+            if (interestIcon is not null)
+                WanderInterest = interestIcon.Center;
+            else if (interestWindow is not null)
+                WanderInterest = ClosestPoint(interestWindow.Bounds, pos);
         }
         else
         {

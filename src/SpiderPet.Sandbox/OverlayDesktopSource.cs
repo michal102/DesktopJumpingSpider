@@ -100,6 +100,8 @@ public sealed class OverlayDesktopSource : IDesktopSource, IDesktopIconControl
             _lastOut,
             icons,
             caret,
-            s.Typing);
+            s.Typing,
+            s.IdleSeconds,
+            s.LeftDown);
     }
 }

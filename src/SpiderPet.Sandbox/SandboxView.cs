@@ -63,6 +63,7 @@ public sealed class SandboxView : Control
     private readonly WindowRider _rider = new();
     private readonly SpiderBrain _brain = new();
     private readonly SpiderCarry _carry = new();
+    private readonly SpiderWanderer _wanderer = new();
     private readonly Random _rng = new();
 
     private Vec2 _dragOffset;
@@ -304,7 +305,10 @@ public sealed class SandboxView : Control
         {
             if (now == SpiderState.Startled) ShowEmote("❗", 1.0);
             else if (now == SpiderState.Reaching) ShowEmote("✨", 1.4);
+            else if (now == SpiderState.LookingAtCursor) ShowEmote("👀", 1.2);
+            else if (now == SpiderState.Approaching) ShowEmote("💞", 1.2);
         };
+        _brain.CalledOver += goal => _wanderer.GoTo(Spider, goal);
         _brain.Dodged += () => ShowEmote("💦", 1.0);
 
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(8), DispatcherPriority.Render, OnTick);
@@ -351,6 +355,12 @@ public sealed class SandboxView : Control
     /// <summary>Soft light glow drawn under the spider.</summary>
     public bool ShowGlow { get; set; }
     
+    /// <summary>The spider may walk around on its own (the host turns this off while somebody pilots it).</summary>
+    public bool WanderEnabled { get; set; }
+
+    /// <summary>The wanderer, for debug drawing and tuning.</summary>
+    public SpiderWanderer Wanderer => _wanderer;
+
     private bool _spiderVisible = true;
     public bool SpiderVisible
     {
@@ -472,7 +482,9 @@ public sealed class SandboxView : Control
 
         if (_emoteLeft > 0.0)
             _emoteLeft -= dt;
-        if ((snapshot.Cursor - _lastCursor).Length > 3.0 || _carry.Busy || _isDragging || _keys.Count > 0)
+        // "active" also means typing or clicking anywhere, not only moving the mouse over the spider's screen
+        bool userBusy = snapshot.IdleSeconds is double idle && idle < 5.0;
+        if ((snapshot.Cursor - _lastCursor).Length > 3.0 || _carry.Busy || _isDragging || _keys.Count > 0 || userBusy)
         {
             _lastCursor = snapshot.Cursor;
             _lastActivity = now;
@@ -491,6 +503,18 @@ public sealed class SandboxView : Control
             _carry.Cancel();
         _carry.Bounds = new RectD(0, 0, Bounds.Width, Bounds.Height);
         _carry.Update(dt, Spider, _watcher.Current.Cursor);
+
+        if (_brain.State is SpiderState.Wandering or SpiderState.Approaching)
+        {
+            Spider.Speed = _baseSpeed;
+            _wanderer.Update(dt, Spider, _watcher.Current, new RectD(0, 0, Bounds.Width, Bounds.Height), _brain.WanderInterest);
+            if (_brain.State == SpiderState.Approaching && !_wanderer.Called)
+                _brain.EndApproach();   // it got there
+        }
+        else
+        {
+            _wanderer.Interrupt();
+        }
 
         Spider.Update(dt);
         KeepInside();
@@ -659,7 +683,7 @@ public sealed class SandboxView : Control
     {
         // The brain (a state machine) decides who is in charge this frame.
         Vec2? look = _brain.Think(dt, Spider, _watcher.Current,
-            new BrainContext(_isDragging, _carry.Busy, _hover));
+            new BrainContext(_isDragging, _carry.Busy, _hover, WanderEnabled && _keys.Count == 0));
         Spider.ReachTarget = _brain.ReachPoint;
 
         if (_isDragging)

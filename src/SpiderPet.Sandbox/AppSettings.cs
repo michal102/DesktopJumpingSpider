@@ -19,7 +19,10 @@ public sealed class AppSettings
     private bool _showWindowOutlines = false;
     private bool _showInfoPanel = false;
     private bool _showGlow;
-    private bool _pilotMode= true;
+    private bool _pilotMode= false;
+    private bool _wanderAround = true;
+    private bool _avoidIcons = true;
+    private bool _cursorInteraction = true;
     private double _baseSpeed = 300.0;
     private bool _showSpider = true;
     private bool _showIconMarks = false;
@@ -71,6 +74,15 @@ public sealed class AppSettings
 
     /// <summary>Soft light glow under the spider so it stays visible on dark backgrounds.</summary>
     public bool ShowGlow { get => _showGlow; set => Set(ref _showGlow, value); }
+
+    /// <summary>The spider walks around on its own, drifting towards screen and window edges. Paused while <see cref="PilotMode"/> is on.</summary>
+    public bool WanderAround { get => _wanderAround; set => Set(ref _wanderAround, value); }
+
+    /// <summary>While wandering, walk round the desktop icons instead of over them (only when there are few of them).</summary>
+    public bool AvoidIcons { get => _avoidIcons; set => Set(ref _avoidIcons, value); }
+
+    /// <summary>Watch the mouse when it is waved near the spider, and come over when double-clicked meanwhile.</summary>
+    public bool CursorInteraction { get => _cursorInteraction; set => Set(ref _cursorInteraction, value); }
 
     /// <summary>Keyboard control (WASD/arrows, shift, +/-), read globally.</summary>
     public bool PilotMode { get => _pilotMode; set => Set(ref _pilotMode, value); }

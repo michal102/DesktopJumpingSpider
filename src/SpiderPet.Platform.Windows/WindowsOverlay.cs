@@ -58,6 +58,9 @@ public static class WindowsOverlay
         NativeMethods.SetWindowPos(hWnd, NativeMethods.HWND_TOPMOST, x, y, width, height, NativeMethods.SWP_NOACTIVATE);
     }
 
+    /// <summary>The window that has the keyboard focus right now (zero when there is none).</summary>
+    public static IntPtr GetForeground() => NativeMethods.GetForegroundWindow();
+
     /// <summary>Re-asserts topmost (other topmost windows can end up above the overlay over time).</summary>
     public static void KeepTopmost(IntPtr hWnd)
     {

@@ -33,6 +33,21 @@ internal struct GUITHREADINFO
     public RECT rcCaret;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct COMPOSITIONFORM
+{
+    public uint dwStyle;
+    public POINT ptCurrentPos;
+    public RECT rcArea;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct LASTINPUTINFO
+{
+    public uint cbSize;
+    public uint dwTime;
+}
+
 internal static class NativeMethods
 {
     public const int GWL_EXSTYLE = -20;
@@ -122,6 +137,29 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+    // The input method keeps the position of the text being edited, and apps that draw their own caret (Java and
+    // Swing programs such as the JetBrains IDEs) still tell it where that is, so it can place its popup.
+    [DllImport("imm32.dll")]
+    public static extern IntPtr ImmGetContext(IntPtr hWnd);
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmReleaseContext(IntPtr hWnd, IntPtr himc);
+
+    [DllImport("imm32.dll")]
+    public static extern bool ImmGetCompositionWindow(IntPtr himc, out COMPOSITIONFORM form);
 
     [DllImport("user32.dll")]
     public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
