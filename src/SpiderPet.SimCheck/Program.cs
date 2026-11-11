@@ -46,6 +46,7 @@ RunStateChecks();
 RunPokeAndSkitterChecks();
 RunDeleteTypeDodgeChecks();
 RunWanderChecks();
+RunFidgetChecks();
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : $"{failures} CHECK(S) FAILED");
@@ -615,6 +616,132 @@ void RunCarryChecks()
         avoids &= !win.Bounds.Contains(d);
     }
     Check("a spider on the bare desktop does not carry things into a window", avoids);
+}
+
+void RunFidgetChecks()
+{
+    Console.WriteLine();
+    Console.WriteLine("== grooming, sleeping, hunting, media ==");
+    const double dt = 1.0 / 120.0;
+    var empty = new List<DesktopWindow>();
+
+    // grooming happens in pauses, and only then
+    var s1 = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) s1.Update(dt);
+    var f1 = new SpiderFidget(new Random(4));
+    bool groomed = false, groomedWhileCommanded = false;
+    for (int i = 0; i < 120 * 90; i++)
+    {
+        f1.Update(dt, s1, SpiderState.Watching, 0.0);
+        s1.Grooming = f1.Grooming;
+        s1.Update(dt);
+        groomed |= f1.Grooming;
+    }
+    Check("a still spider cleans itself now and then", groomed);
+    var f2 = new SpiderFidget(new Random(4));
+    for (int i = 0; i < 120 * 90; i++)
+    {
+        f2.Update(dt, s1, SpiderState.Reaching, 0.0);
+        groomedWhileCommanded |= f2.Grooming;
+    }
+    Check("it never cleans itself while reaching for something", !groomedWhileCommanded);
+    s1.Grooming = true;
+    for (int i = 0; i < 60; i++) s1.Update(dt);
+    Check("the grooming pose eases in", s1.GroomAmount > 0.99);
+
+    // drowsy after a long idle, asleep only when told it arrived, awake at the first input, never during media
+    var s2 = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) s2.Update(dt);
+    var f3 = new SpiderFidget(new Random(1));
+    bool yawned = false;
+    f3.Yawned += () => yawned = true;
+    double idle = 0.0;
+    for (int i = 0; i < 120 * 10; i++)
+    {
+        idle += dt;
+        f3.Update(dt, s2, SpiderState.Watching, 50.0 + idle);
+    }
+    Check("a long idle makes it drowsy, with a yawn", f3.Drowsy && yawned && !f3.Sleeping);
+    f3.FallAsleep();
+    Check("it sleeps once it is told it reached its place", f3.Sleeping);
+    s2.Sleeping = true;
+    for (int i = 0; i < 240; i++) s2.Update(dt);
+    Check("the legs tuck in while asleep", s2.SleepAmount > 0.99);
+    f3.Update(dt, s2, SpiderState.Sleeping, 0.2);
+    Check("any input wakes it", !f3.Sleeping && !f3.Drowsy);
+
+    var f4 = new SpiderFidget(new Random(2));
+    for (int i = 0; i < 120 * 20; i++)
+        f4.Update(dt, s2, SpiderState.WatchingMedia, 500.0, allowSleep: false);
+    Check("it does not get drowsy while a video is on", !f4.Drowsy && !f4.Sleeping);
+
+    // the brain: sleeping, hunting and media in the priority list
+    var brain = new SpiderBrain();
+    var b = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) b.Update(dt);
+    var quiet = new DesktopSnapshot(new Vec2(100, 100), empty);
+    brain.Think(dt, b, quiet, new BrainContext(Sleeping: true, Wandering: true));
+    Check("sleeping beats wandering", brain.State == SpiderState.Sleeping);
+    brain.Think(dt, b, quiet, new BrainContext(Hunting: true, Sleeping: true));
+    Check("hunting beats sleeping", brain.State == SpiderState.Hunting);
+    brain.Think(dt, b, quiet, new BrainContext(Carrying: true, Hunting: true));
+    Check("carrying beats hunting", brain.State == SpiderState.Carrying);
+
+    var mediaBrain = new SpiderBrain();
+    var media = new DesktopSnapshot(new Vec2(100, 100), empty, MediaActive: true, MediaCentre: new Vec2(600, 400));
+    for (int i = 0; i < 120; i++) mediaBrain.Think(dt, b, media, new BrainContext(Wandering: true));
+    Check("a video that has only just started is not yet reacted to", mediaBrain.State == SpiderState.Wandering);
+    for (int i = 0; i < 360; i++) mediaBrain.Think(dt, b, media, new BrainContext(Wandering: true));
+    Check("after a couple of seconds it settles in to watch, instead of wandering", mediaBrain.State == SpiderState.WatchingMedia);
+    for (int i = 0; i < 120 * 5; i++) mediaBrain.Think(dt, b, quiet, new BrainContext(Wandering: true));
+    Check("when the video is over it goes back to wandering", mediaBrain.State == SpiderState.Wandering);
+    mediaBrain.WatchMedia = false;
+    for (int i = 0; i < 360; i++) mediaBrain.Think(dt, b, media, new BrainContext(Wandering: true));
+    Check("with the option off it ignores media", mediaBrain.State == SpiderState.Wandering);
+
+    // hunting: lively prey close by is hunted, a racing cursor is not
+    var prey = new CursorHunter(new Random(8)) { StartChancePerSecond = 1000.0 };
+    var hunter = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) hunter.Update(dt);
+    bool started = false, caughtOrMissed = false;
+    prey.Started += () => started = true;
+    prey.Finished += _ => caughtOrMissed = true;
+    double t = 0.0;
+    for (int i = 0; i < 120 * 40 && !caughtOrMissed; i++)
+    {
+        t += dt;
+        // a cursor that wiggles slowly about 200 px away
+        var cur = new Vec2(700 + 15 * Math.Sin(t * 3.0), 500 + 15 * Math.Cos(t * 2.0));
+        if (prey.Active)
+            prey.Update(dt, hunter, cur);
+        else
+            prey.Observe(dt, hunter, cur);
+        hunter.Update(dt);
+    }
+    Check("slow close prey starts a hunt", started);
+    Check("and the hunt ends (caught or not)", caughtOrMissed);
+
+    var still = new CursorHunter(new Random(8)) { StartChancePerSecond = 1000.0 };
+    bool stillStarted = false;
+    still.Started += () => stillStarted = true;
+    var s4 = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) s4.Update(dt);
+    for (int i = 0; i < 120 * 40; i++)
+        still.Observe(dt, s4, new Vec2(700, 500));
+    Check("a cursor that does not move at all is hunted too", stillStarted);
+
+    var fast = new CursorHunter(new Random(8)) { StartChancePerSecond = 1000.0 };
+    bool fastStarted = false;
+    fast.Started += () => fastStarted = true;
+    var s3 = new Spider(new Vec2(500, 500));
+    for (int i = 0; i < 60; i++) s3.Update(dt);
+    t = 0.0;
+    for (int i = 0; i < 120 * 40; i++)
+    {
+        t += dt;
+        fast.Observe(dt, s3, new Vec2(700 + 150 * Math.Sin(t * 20.0), 500));
+    }
+    Check("a cursor racing about is not hunted", !fastStarted);
 }
 
 void RunWanderChecks()

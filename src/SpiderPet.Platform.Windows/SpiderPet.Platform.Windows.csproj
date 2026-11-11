@@ -13,4 +13,9 @@
     <ProjectReference Include="..\SpiderPet.Core\SpiderPet.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Core Audio (the Windows mixer): lets the spider hear that the program in front is playing sound. -->
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+  </ItemGroup>
+
 </Project>

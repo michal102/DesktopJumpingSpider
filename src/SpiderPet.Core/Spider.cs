@@ -404,6 +404,25 @@ public sealed class Spider
     private double _reach;
     private double _reachTime;
 
+    /// <summary>
+    /// The spider cleans itself: the front legs take turns rubbing at its face. Only for a spider standing still;
+    /// the pose eases in and out, so setting and clearing this is always smooth.
+    /// </summary>
+    public bool Grooming { get; set; }
+
+    /// <summary>0..1: how far into the grooming pose it is right now.</summary>
+    public double GroomAmount => _groom;
+
+    /// <summary>The spider sleeps: the legs fold in under the body. The pose eases in and out.</summary>
+    public bool Sleeping { get; set; }
+
+    /// <summary>0..1: how deeply asleep (legs tucked in) it is right now.</summary>
+    public double SleepAmount => _sleep;
+
+    private double _groom;
+    private double _groomTime;
+    private double _sleep;
+
     // ---------------------------------------------------------------- leaping
 
     /// <summary>True while a leap (<see cref="Leap"/>) is under way.</summary>
@@ -544,6 +563,13 @@ public sealed class Spider
             _reachTime += dt;
         else
             _reachTime = 0.0;
+
+        _groom = MathUtil.MoveToward(_groom, Grooming && _reach <= 0.0 ? 1.0 : 0.0, dt / 0.25);
+        if (_groom > 0.0)
+            _groomTime += dt;
+        else
+            _groomTime = 0.0;
+        _sleep = MathUtil.MoveToward(_sleep, Sleeping ? 1.0 : 0.0, dt / 1.2);
 
         UpdateLegs(dt);
         UpdatePose(buildGeometry);
@@ -728,6 +754,31 @@ public sealed class Spider
                 if (rl > hi) rv = rv * (hi / rl);
                 else if (rl < lo && rl > 1e-6) rv = rv * (lo / rl);
                 aim = aim.Lerp(leg.Hip + rv, e);
+            }
+
+            if (_groom > 0.0 && leg.Index == 0)
+            {
+                // The two front legs take turns: one comes up to the face and rubs, then the other.
+                double e = _groom * _groom * (3.0 - 2.0 * _groom);
+                double turn = 0.5 + 0.5 * Math.Sin(_groomTime * 2.4 + (leg.Side > 0 ? 0.0 : Math.PI));
+                double w = turn * turn * (3.0 - 2.0 * turn) * e;
+                double rub = Math.Sin(_groomTime * 15.0 + leg.Side) * 0.22 * _u;
+                Vec2 want = Position + new Vec2(leg.Side * 0.4 * _u + rub * 0.5, -2.5 * _u + rub).Rotated(HeadingDeg);
+                Vec2 rv = want - leg.Hip;
+                double rl = rv.Length;
+                double lo = leg.MinReach * 1.05;
+                double hi = leg.Full * 0.97;
+                if (rl > hi) rv = rv * (hi / rl);
+                else if (rl < lo && rl > 1e-6) rv = rv * (lo / rl);
+                aim = aim.Lerp(leg.Hip + rv, w);
+            }
+
+            if (_sleep > 0.0)
+            {
+                // legs fold in under the body, and it breathes a little
+                double s = _sleep * _sleep * (3.0 - 2.0 * _sleep);
+                double breath = 1.0 + 0.04 * Math.Sin(_palpPhase * 0.25);
+                aim = leg.Hip + (aim - leg.Hip) * ((1.0 - 0.5 * s) * (1.0 + (breath - 1.0) * s));
             }
 
             if (leg.Lift > 0.0)

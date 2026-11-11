@@ -288,10 +288,16 @@ public sealed class OverlayWindow : Window
         _windows.TrackTyping = _settings.LookAtText;
         _view.DropStyle = _settings.DropStyle;
         _view.HoardCorner = _settings.HoardCorner;
+        _view.RestCorner = _settings.RestCorner;
+        _view.WatchCorner = _settings.WatchCorner;
         _view.Spider.SteppedTurning = _settings.SteppedTurning;
         _view.WanderEnabled = _settings.WanderAround && !_settings.PilotMode;   // piloting it yourself stops it moving on its own
         _view.Wanderer.AvoidIcons = _settings.AvoidIcons;
         _view.Brain.ReactToCursor = _settings.CursorInteraction;
+        _view.Hunter.Enabled = _settings.HuntCursor;
+        _view.Fidget.Enabled = _settings.IdleBehaviors;
+        _view.Brain.WatchMedia = _settings.WatchMedia;
+        _windows.TrackMedia = _settings.WatchMedia;
         _windows.TrackIcons = _settings.ShowIconMarks || _settings.LookAtIcons || (_settings.WanderAround && _settings.AvoidIcons);
         
         if (_spiderItem is not null) _spiderItem.Header = SpiderHeader();

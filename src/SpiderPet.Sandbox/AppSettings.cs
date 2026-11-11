@@ -23,6 +23,11 @@ public sealed class AppSettings
     private bool _wanderAround = true;
     private bool _avoidIcons = true;
     private bool _cursorInteraction = true;
+    private bool _idleBehaviors = true;
+    private bool _huntCursor = true;
+    private bool _watchMedia = true;
+    private RestSpot _restCorner = RestSpot.Auto;
+    private RestSpot _watchCorner = RestSpot.Auto;
     private double _baseSpeed = 300.0;
     private bool _showSpider = true;
     private bool _showIconMarks = false;
@@ -83,6 +88,21 @@ public sealed class AppSettings
 
     /// <summary>Watch the mouse when it is waved near the spider, and come over when double-clicked meanwhile.</summary>
     public bool CursorInteraction { get => _cursorInteraction; set => Set(ref _cursorInteraction, value); }
+
+    /// <summary>Cleans itself now and then, and goes to a corner to sleep when nothing has happened for a long time.</summary>
+    public bool IdleBehaviors { get => _idleBehaviors; set => Set(ref _idleBehaviors, value); }
+
+    /// <summary>Sometimes stalks and pounces on the mouse cursor when it is close and moves slowly.</summary>
+    public bool HuntCursor { get => _huntCursor; set => Set(ref _huntCursor, value); }
+
+    /// <summary>Tucks away in a corner and watches along while a game or video is on.</summary>
+    public bool WatchMedia { get => _watchMedia; set => Set(ref _watchMedia, value); }
+
+    /// <summary>The corner it goes to when it sleeps (Auto = a free bottom corner).</summary>
+    public RestSpot RestCorner { get => _restCorner; set => Set(ref _restCorner, value); }
+
+    /// <summary>The corner it goes to when it watches a video, game or photos (Auto = a free bottom corner).</summary>
+    public RestSpot WatchCorner { get => _watchCorner; set => Set(ref _watchCorner, value); }
 
     /// <summary>Keyboard control (WASD/arrows, shift, +/-), read globally.</summary>
     public bool PilotMode { get => _pilotMode; set => Set(ref _pilotMode, value); }

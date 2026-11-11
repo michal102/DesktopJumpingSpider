@@ -23,6 +23,7 @@ public sealed class SpiderWanderer
     private Vec2 _goal;
     private long _surface;
     private bool _called;           // walking to a place somebody asked for, not wandering
+    private double _calledPace = 0.9, _calledArrive = 40.0;
     private Vec2? _restInterest;    // something it glanced at when it stopped
 
     public SpiderWanderer(Random? rng = null)
@@ -89,8 +90,10 @@ public sealed class SpiderWanderer
     public SpiderWalker Walker => _walker;
 
     /// <summary>Walk straight to <paramref name="target"/> (it was called there), without thinking first.</summary>
-    public void GoTo(Spider spider, Vec2 target)
+    public void GoTo(Spider spider, Vec2 target, double pace = 0.9, double arriveRadius = 40.0)
     {
+        _calledPace = pace;
+        _calledArrive = arriveRadius;
         _goal = target;
         _surface = 0;
         _called = true;
@@ -129,7 +132,7 @@ public sealed class SpiderWanderer
         }
 
         _walkT += dt;
-        double arrive = _called ? 40.0 : 14.0;
+        double arrive = _called ? _calledArrive : 14.0;
         bool lost = false;
         if (!_called)
         {
@@ -144,7 +147,7 @@ public sealed class SpiderWanderer
 
         if (!_called)
             _walker.Bounds = WalkArea(snapshot, area, _surface);
-        _walker.Step(dt, spider, _goal, _called ? 0.9 : Pace);
+        _walker.Step(dt, spider, _goal, _called ? _calledPace : Pace);
     }
 
     private void Rest(Spider spider, Vec2? interest = null)

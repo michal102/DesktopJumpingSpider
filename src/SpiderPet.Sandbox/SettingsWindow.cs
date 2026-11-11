@@ -25,9 +25,12 @@ public sealed class SettingsWindow : Window
     private readonly CheckBox _lookText = new() { Content = "Watch the text when you type close to it" };
     private readonly CheckBox _dodge = new() { Content = "Hop back from windows that come fast at it" };
     private readonly CheckBox _stepped = new() { Content = "Stepped turning (big turns are split into a few steps)" };
-    private readonly CheckBox _wander = new() { Content = "Walk around on its own (paused while pilot mode is on)" };
-    private readonly CheckBox _avoidIcons = new() { Content = "Walk round desktop icons instead of over them (when there are few)" };
-    private readonly CheckBox _cursorPlay = new() { Content = "Watch the mouse when you wave it near; double-click to call it over" };
+    private readonly CheckBox _wander = new() { Content = new TextBlock { Text = "Walk around on its own (paused while pilot mode is on)", TextWrapping = TextWrapping.Wrap } };
+    private readonly CheckBox _avoidIcons = new() { Content = new TextBlock { Text = "Walk round desktop icons instead of over them (when there are few)", TextWrapping = TextWrapping.Wrap } };
+    private readonly CheckBox _cursorPlay = new() { Content = new TextBlock { Text = "Watch the mouse when you wave it near; double-click to call it over", TextWrapping = TextWrapping.Wrap } };
+    private readonly CheckBox _idle = new() { Content = new TextBlock { Text = "Idle behaviours: cleaning itself, sleeping in a corner when you are away", TextWrapping = TextWrapping.Wrap } };
+    private readonly CheckBox _hunt = new() { Content = new TextBlock { Text = "Sometimes stalk and pounce on the cursor", TextWrapping = TextWrapping.Wrap } };
+    private readonly CheckBox _media = new() { Content = new TextBlock { Text = "Tuck into a corner and watch along while you watch videos, play games or look at photos", TextWrapping = TextWrapping.Wrap } };
     private readonly CheckBox _pilot = new() { Content = "Keyboard control - pilot mode (Ctrl+Alt+F8)" };
     private readonly Slider _speed = new() { Minimum = 20, Maximum = 1200 };
     private readonly TextBlock _speedLabel = new();
@@ -47,6 +50,16 @@ public sealed class SettingsWindow : Window
     private readonly ComboBox _corner = new()
     {
         ItemsSource = new[] { "Top right", "Top left", "Bottom right", "Bottom left" },
+    };
+
+    private readonly ComboBox _restCorner = new()
+    {
+        ItemsSource = new[] { "Automatic (a free bottom corner)", "Top right", "Top left", "Bottom right", "Bottom left" },
+    };
+
+    private readonly ComboBox _watchCorner = new()
+    {
+        ItemsSource = new[] { "Automatic (a free bottom corner)", "Top right", "Top left", "Bottom right", "Bottom left" },
     };
 
     // Display
@@ -76,7 +89,10 @@ public sealed class SettingsWindow : Window
             WindowTransparencyLevel.Blur,
         };
 
-        AddPage("Behavior", _lookIcons, _lookWindows, _lookText, _reactChanges, _dodge, _stepped, _wander, _avoidIcons, _cursorPlay, _pilot,
+        AddPage("Behavior", _lookIcons, _lookWindows, _lookText, _reactChanges, _dodge, _stepped, _wander, _avoidIcons, _cursorPlay, _hunt, _idle, _media,
+            Label("Corner for sleeping"), _restCorner,
+            Label("Corner for watching videos, games and photos"), _watchCorner,
+            _pilot,
             Label("Walking speed"), _speed, _speedLabel);
         AddPage("Drops", Note("What happens when you drop a file onto the spider:"),
             _dropStyle,
@@ -131,6 +147,9 @@ public sealed class SettingsWindow : Window
         Wire(_wander, v => _settings.WanderAround = v);
         Wire(_avoidIcons, v => _settings.AvoidIcons = v);
         Wire(_cursorPlay, v => _settings.CursorInteraction = v);
+        Wire(_hunt, v => _settings.HuntCursor = v);
+        Wire(_idle, v => _settings.IdleBehaviors = v);
+        Wire(_media, v => _settings.WatchMedia = v);
         Wire(_pilot, v => _settings.PilotMode = v);
         Wire(_spider, v => _settings.ShowSpider = v);
         Wire(_glow, v => _settings.ShowGlow = v);
@@ -159,6 +178,14 @@ public sealed class SettingsWindow : Window
         _dropStyle.SelectionChanged += (_, _) =>
         {
             if (!_updating && _dropStyle.SelectedIndex >= 0) _settings.DropStyle = (DropMode)_dropStyle.SelectedIndex;
+        };
+        _restCorner.SelectionChanged += (_, _) =>
+        {
+            if (!_updating && _restCorner.SelectedIndex >= 0) _settings.RestCorner = (RestSpot)_restCorner.SelectedIndex;
+        };
+        _watchCorner.SelectionChanged += (_, _) =>
+        {
+            if (!_updating && _watchCorner.SelectedIndex >= 0) _settings.WatchCorner = (RestSpot)_watchCorner.SelectedIndex;
         };
         _corner.SelectionChanged += (_, _) =>
         {
@@ -264,11 +291,16 @@ public sealed class SettingsWindow : Window
         _wander.IsChecked = _settings.WanderAround;
         _avoidIcons.IsChecked = _settings.AvoidIcons;
         _cursorPlay.IsChecked = _settings.CursorInteraction;
+        _hunt.IsChecked = _settings.HuntCursor;
+        _idle.IsChecked = _settings.IdleBehaviors;
+        _media.IsChecked = _settings.WatchMedia;
         _pilot.IsChecked = _settings.PilotMode;
         _speed.Value = _settings.BaseSpeed;
         _speedLabel.Text = $"{_settings.BaseSpeed:0} px/s";
         _dropStyle.SelectedIndex = (int)_settings.DropStyle;
         _corner.SelectedIndex = (int)_settings.HoardCorner;
+        _restCorner.SelectedIndex = (int)_settings.RestCorner;
+        _watchCorner.SelectedIndex = (int)_settings.WatchCorner;
         _spider.IsChecked = _settings.ShowSpider;
         _glow.IsChecked = _settings.ShowGlow;
         _outlines.IsChecked = _settings.ShowWindowOutlines;

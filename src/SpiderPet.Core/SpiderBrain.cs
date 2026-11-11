@@ -35,6 +35,12 @@ public enum SpiderState
     Startled,
     /// <summary>It was called over with a double click and walks to the mouse cursor.</summary>
     Approaching,
+    /// <summary>It stalks the cursor and pounces on it (see <see cref="CursorHunter"/>).</summary>
+    Hunting,
+    /// <summary>Nobody has done anything for a long time: it sleeps.</summary>
+    Sleeping,
+    /// <summary>A game or video is on: it tucks itself away in a corner and watches along.</summary>
+    WatchingMedia,
     /// <summary>The mouse was waved near it: it follows the cursor with its eyes for a while.</summary>
     LookingAtCursor,
     /// <summary>Someone is typing close to the spider: it watches the text appear.</summary>
@@ -54,7 +60,10 @@ public enum SpiderState
 /// <param name="Carrying">The carry task is busy (<see cref="SpiderCarry.Busy"/>).</param>
 /// <param name="HoverPoint">Where an item that is dragged over the spider currently is, or null when there is none.</param>
 /// <param name="Wandering">The spider may walk around on its own (the setting is on and nobody is piloting it).</param>
-public readonly record struct BrainContext(bool Held = false, bool Carrying = false, Vec2? HoverPoint = null, bool Wandering = false);
+/// <param name="Sleeping">The idle behaviours say it is asleep.</param>
+/// <param name="Hunting">The cursor hunter is on a hunt.</param>
+public readonly record struct BrainContext(bool Held = false, bool Carrying = false, Vec2? HoverPoint = null, bool Wandering = false,
+                                           bool Sleeping = false, bool Hunting = false);
 
 /// <summary>
 /// The spider's decision layer, a small state machine (<see cref="SpiderState"/>).
@@ -68,11 +77,14 @@ public readonly record struct BrainContext(bool Held = false, bool Carrying = fa
 ///  5. <see cref="SpiderState.Dropping"/> (it was just told to let go)
 ///  6. <see cref="SpiderState.Startled"/> (a sudden change, for <see cref="ChangeSeconds"/>)
 ///  7. <see cref="SpiderState.Approaching"/> (called over with a double click)
-///  8. <see cref="SpiderState.LookingAtCursor"/> (the mouse was waved near it)
-///  9. <see cref="SpiderState.LookingAtText"/> (someone types close by)
-/// 10. <see cref="SpiderState.Wandering"/> (it may roam, and nothing above needs it; see <see cref="WanderInterest"/>)
-/// 11. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
-/// 12. <see cref="SpiderState.Watching"/> (the cursor)
+///  8. <see cref="SpiderState.Hunting"/> (stalking the cursor)
+///  9. <see cref="SpiderState.Sleeping"/> (nobody did anything for a long time)
+/// 10. <see cref="SpiderState.LookingAtCursor"/> (the mouse was waved near it)
+/// 11. <see cref="SpiderState.LookingAtText"/> (someone types close by)
+/// 12. <see cref="SpiderState.WatchingMedia"/> (a game or video is on)
+/// 13. <see cref="SpiderState.Wandering"/> (it may roam, and nothing above needs it; see <see cref="WanderInterest"/>)
+/// 14. <see cref="SpiderState.LookingAtIcon"/> / <see cref="SpiderState.LookingAtWindow"/> (whichever is nearer and close enough)
+/// 15. <see cref="SpiderState.Watching"/> (the cursor)
 ///
 /// A window that comes fast at the spider makes it hop back a little (<see cref="DodgeWindows"/>); that is a
 /// <see cref="SpiderState.Leaping"/> like any other hop.
@@ -100,6 +112,9 @@ public sealed class SpiderBrain
 
     private Change? _change;
     private double _changeLeft;
+
+    private double _mediaFor, _mediaGone;
+    private bool _mediaOn;
 
     private readonly WaveDetector _wave = new();
     private double _cursorLeft;
@@ -147,6 +162,16 @@ public sealed class SpiderBrain
 
     /// <summary>Typing this close (body units) catches the spider's attention.</summary>
     public double TextAttentionRadiusUnits { get; set; } = 350.0;
+
+    /// <summary>A game or video has been on for a while (and <see cref="WatchMedia"/> is on).</summary>
+    public bool MediaOn => _mediaOn;
+
+    /// <summary>Tuck away in a corner and watch along while a game or video is on.</summary>
+    public bool WatchMedia { get; set; } = true;
+
+    /// <summary>The media must have been on this long (seconds) before the spider reacts, and off this long before it stops.</summary>
+    public double MediaStartSeconds { get; set; } = 2.0;
+    public double MediaEndSeconds { get; set; } = 3.0;
 
     /// <summary>Notice a waving mouse, and come over when called with a double click while watching it.</summary>
     public bool ReactToCursor { get; set; } = true;
@@ -253,6 +278,9 @@ public sealed class SpiderBrain
         SpiderState.Dropping => "dropped it",
         SpiderState.LookingAtText => "text being typed",
         SpiderState.Approaching => "coming to the cursor",
+        SpiderState.Hunting => "hunting the cursor",
+        SpiderState.Sleeping => "asleep",
+        SpiderState.WatchingMedia => "watching a video or game",
         SpiderState.LookingAtCursor => "watching the waving mouse",
         SpiderState.Wandering => "wandering",
         SpiderState.LookingAtIcon => $"icon #{Attention?.Index}",
@@ -346,6 +374,19 @@ public sealed class SpiderBrain
             }
         }
 
+        if (WatchMedia && snapshot.MediaActive)
+        {
+            _mediaFor += dt;
+            _mediaGone = 0.0;
+            if (_mediaFor >= MediaStartSeconds) _mediaOn = true;
+        }
+        else
+        {
+            _mediaGone += dt;
+            _mediaFor = 0.0;
+            if (_mediaGone >= MediaEndSeconds || !WatchMedia) _mediaOn = false;
+        }
+
         if (_cursorLeft > 0.0) _cursorLeft -= dt;
         if (_approachLeft > 0.0) _approachLeft -= dt;
         WanderInterest = null;
@@ -422,6 +463,14 @@ public sealed class SpiderBrain
         {
             next = SpiderState.Approaching;   // the walk itself belongs to the wanderer
         }
+        else if (ctx.Hunting)
+        {
+            next = SpiderState.Hunting;   // the hunter drives the spider
+        }
+        else if (ctx.Sleeping)
+        {
+            next = SpiderState.Sleeping;
+        }
         else if (_cursorLeft > 0.0)
         {
             next = SpiderState.LookingAtCursor;
@@ -431,6 +480,11 @@ public sealed class SpiderBrain
         {
             next = SpiderState.LookingAtText;
             look = textAt;
+        }
+        else if (_mediaOn)
+        {
+            next = SpiderState.WatchingMedia;
+            look = snapshot.MediaCentre;
         }
         else if (ctx.Wandering)
         {

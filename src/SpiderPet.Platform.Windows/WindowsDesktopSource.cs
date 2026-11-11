@@ -41,6 +41,17 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
 
     private readonly TypingWatcher _typing = new();
 
+    // ---- media: a game or a video in the foreground
+    private double _lastMediaCheck = double.NegativeInfinity;
+    private bool _mediaActive;
+    private Vec2? _mediaCentre;
+
+    /// <summary>Whether a game, video, photo or similar in the foreground is noticed (see <see cref="MediaDetector"/>).</summary>
+    public bool TrackMedia { get; set; } = true;
+
+    /// <summary>The media detector, with all its lists (programs, folders, title words) open for tuning.</summary>
+    public MediaDetector Media { get; } = new();
+
     private readonly DesktopIconReader _iconReader = new();
     private double _lastIconScan = double.NegativeInfinity;
     private IReadOnlyList<DesktopIcon> _icons = Array.Empty<DesktopIcon>();
@@ -64,7 +75,11 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
     /// <summary>A window that must never be reported (the overlay itself). Other windows of this process, e.g. settings, are reported.</summary>
     public IntPtr IgnoredWindow { get; set; }
 
-    public void Dispose() => _iconReader.Dispose();
+    public void Dispose()
+    {
+        _iconReader.Dispose();
+        Media.Dispose();
+    }
 
     // ---- IDesktopIconControl (physical screen pixels)
 
@@ -103,13 +118,43 @@ public sealed class WindowsDesktopSource : IDesktopSource, IDesktopIconControl, 
             _lastIconScan = now;
         }
 
+        UpdateMedia(now);
+
         bool typing = TrackTyping && _typing.Update();
         Vec2? caret = null;
         if (typing && _typing.TryGetCaret(out Vec2 caretAt))
             caret = caretAt;
 
         return new DesktopSnapshot(new Vec2(cursor.X, cursor.Y), _windows, _icons, caret, typing && caret is not null, IdleSeconds(),
-            (NativeMethods.GetAsyncKeyState(0x01) & 0x8000) != 0);
+            (NativeMethods.GetAsyncKeyState(0x01) & 0x8000) != 0, _mediaActive, _mediaCentre);
+    }
+
+    // Twice a second: is the window in front a game, a video, a photo?
+    private void UpdateMedia(double now)
+    {
+        if (now - _lastMediaCheck < 0.5)
+            return;
+        double elapsed = double.IsNegativeInfinity(_lastMediaCheck) ? 0.5 : now - _lastMediaCheck;
+        _lastMediaCheck = now;
+        _mediaActive = false;
+        _mediaCentre = null;
+        if (!TrackMedia)
+            return;
+
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        string title = "";
+        foreach (DesktopWindow w in _windows)
+        {
+            if (w.Id == foreground.ToInt64())
+            {
+                title = w.Title ?? "";
+                break;
+            }
+        }
+
+        MediaResult result = Media.Check(elapsed, foreground, IgnoredWindow, title);
+        _mediaActive = result.Active;
+        _mediaCentre = result.Centre;
     }
 
     /// <summary>Seconds since the last key or mouse input anywhere on the system, or null if Windows will not say.</summary>

@@ -64,6 +64,11 @@ public sealed class SandboxView : Control
     private readonly SpiderBrain _brain = new();
     private readonly SpiderCarry _carry = new();
     private readonly SpiderWanderer _wanderer = new();
+    private readonly SpiderFidget _fidget = new();
+    private readonly CursorHunter _hunter = new();
+    private Vec2? _restSpot;            // the corner it walks to, to watch a video or to sleep
+    private bool _restSettled;
+    private int _restTries;
     private readonly Random _rng = new();
 
     private Vec2 _dragOffset;
@@ -308,6 +313,10 @@ public sealed class SandboxView : Control
             else if (now == SpiderState.LookingAtCursor) ShowEmote("👀", 1.2);
             else if (now == SpiderState.Approaching) ShowEmote("💞", 1.2);
         };
+        _fidget.Yawned += () => ShowEmote("🥱", 1.6);
+        _fidget.SleepChanged += asleep => ShowEmote(asleep ? "💤" : "❓", asleep ? 3.2 : 1.0);
+        _hunter.Started += () => ShowEmote("🎯", 1.2);
+        _hunter.Finished += caught => ShowEmote(caught ? "✨" : "💢", 1.2);
         _brain.CalledOver += goal => _wanderer.GoTo(Spider, goal);
         _brain.Dodged += () => ShowEmote("💦", 1.0);
 
@@ -357,6 +366,44 @@ public sealed class SandboxView : Control
     
     /// <summary>The spider may walk around on its own (the host turns this off while somebody pilots it).</summary>
     public bool WanderEnabled { get; set; }
+
+    private RestSpot _restCorner = RestSpot.Auto;
+
+    private RestSpot _watchCorner = RestSpot.Auto;
+
+    /// <summary>The corner it goes to when it watches a video, game or photos.</summary>
+    public RestSpot WatchCorner
+    {
+        get => _watchCorner;
+        set
+        {
+            if (_watchCorner == value) return;
+            _watchCorner = value;
+            _restSpot = null;
+            _restSettled = false;
+            _restTries = 0;
+        }
+    }
+
+    /// <summary>The corner it goes to when it sleeps.</summary>
+    public RestSpot RestCorner
+    {
+        get => _restCorner;
+        set
+        {
+            if (_restCorner == value) return;
+            _restCorner = value;
+            _restSpot = null;       // choose again
+            _restSettled = false;
+            _restTries = 0;
+        }
+    }
+
+    /// <summary>Grooming and sleeping.</summary>
+    public SpiderFidget Fidget => _fidget;
+
+    /// <summary>Stalks and pounces on the cursor.</summary>
+    public CursorHunter Hunter => _hunter;
 
     /// <summary>The wanderer, for debug drawing and tuning.</summary>
     public SpiderWanderer Wanderer => _wanderer;
@@ -489,10 +536,6 @@ public sealed class SandboxView : Control
             _lastCursor = snapshot.Cursor;
             _lastActivity = now;
         }
-        else if (now - _lastActivity > 40.0 && _emoteLeft <= 0.0)
-        {
-            ShowEmote("💤", 3.2);   // nobody around for a while: dozes off
-        }
         Vec2 carry = _rider.Update(dt, Spider.Position, snapshot.Windows, _isDragging);
         if (carry != Vec2.Zero)
             Spider.Translate(carry);
@@ -504,23 +547,125 @@ public sealed class SandboxView : Control
         _carry.Bounds = new RectD(0, 0, Bounds.Width, Bounds.Height);
         _carry.Update(dt, Spider, _watcher.Current.Cursor);
 
-        if (_brain.State is SpiderState.Wandering or SpiderState.Approaching)
+        SpiderState state = _brain.State;
+        Vec2 cursorNow = _watcher.Current.Cursor;
+        var screen = new RectD(0, 0, Bounds.Width, Bounds.Height);
+
+        // ---- hunting the cursor
+        if (_hunter.Active)
         {
+            if (state is SpiderState.Hunting or SpiderState.Leaping)
+            {
+                if (state == SpiderState.Hunting)
+                    Spider.Speed = _baseSpeed;
+                _hunter.Update(dt, Spider, cursorNow);
+            }
+            else
+            {
+                _hunter.Abort();
+            }
+        }
+        else if (!_isDragging && state is SpiderState.Watching or SpiderState.LookingAtCursor or SpiderState.Wandering)
+        {
+            _hunter.Observe(dt, Spider, cursorNow);
+        }
+
+        // ---- walking: wandering, being called over, going to a corner to watch a video or to sleep
+        if (state is SpiderState.Wandering or SpiderState.Approaching)
+        {
+            _restSettled = false;
+            _restSpot = null;
+            _restTries = 0;
             Spider.Speed = _baseSpeed;
-            _wanderer.Update(dt, Spider, _watcher.Current, new RectD(0, 0, Bounds.Width, Bounds.Height), _brain.WanderInterest);
-            if (_brain.State == SpiderState.Approaching && !_wanderer.Called)
+            _wanderer.Update(dt, Spider, _watcher.Current, screen, _brain.WanderInterest);
+            if (state == SpiderState.Approaching && !_wanderer.Called)
                 _brain.EndApproach();   // it got there
         }
-        else
+        else if (state == SpiderState.WatchingMedia || state == SpiderState.Sleeping && !_fidget.Sleeping)
         {
+            // first to a corner, then it settles there: it watches along, or goes to sleep
+            _restSpot ??= PickRestSpot(_watcher.Current, state == SpiderState.WatchingMedia ? _watchCorner : _restCorner);
+            if (!_restSettled)
+            {
+                Vec2 spot = _restSpot.Value;
+                if (!_wanderer.Called)
+                {
+                    if ((spot - Spider.Position).Length > 36.0 && _restTries < 3)
+                    {
+                        _restTries++;
+                        _wanderer.GoTo(Spider, spot, state == SpiderState.Sleeping ? 0.55 : 0.8, 24.0);
+                    }
+                    else
+                    {
+                        _restSettled = true;
+                        if (state == SpiderState.WatchingMedia)
+                            ShowEmote("🍿", 2.0);
+                        else
+                            _fidget.FallAsleep();
+                    }
+                }
+                if (_wanderer.Called)
+                {
+                    Spider.Speed = _baseSpeed;
+                    _wanderer.Update(dt, Spider, _watcher.Current, screen);
+                }
+            }
+        }
+        else if (state != SpiderState.Sleeping && state != SpiderState.Hunting && !(state == SpiderState.Leaping && _hunter.Active))
+        {
+            _restSettled = false;
+            _restSpot = null;
+            _restTries = 0;
             _wanderer.Interrupt();
         }
+
+        // ---- idle behaviours: grooming, getting drowsy, sleeping
+        double idleFor = now - _lastActivity;
+        _fidget.Update(dt, Spider, state, idleFor, allowSleep: !_brain.MediaOn);
+        Spider.Grooming = _fidget.Grooming;
+        Spider.Sleeping = _fidget.Sleeping;
+        if (_fidget.Sleeping && _emoteLeft <= 0.0)
+            ShowEmote("💤", 3.2);
 
         Spider.Update(dt);
         KeepInside();
 
         Frame?.Invoke();
         InvalidateVisual();
+    }
+
+    // A corner to settle in, away from the windows (bottom ones first, as that is where the taskbar is).
+    private Vec2 PickRestSpot(DesktopSnapshot snapshot, RestSpot corner)
+    {
+        double w = Bounds.Width, h = Bounds.Height;
+        Vec2[] spots = { new(w - 90, h - 100), new(90, h - 100), new(w - 90, 110), new(90, 110) };
+        if (corner != RestSpot.Auto)
+        {
+            // spots: 0 bottom right, 1 bottom left, 2 top right, 3 top left
+            return corner switch
+            {
+                RestSpot.TopRight => spots[2],
+                RestSpot.TopLeft => spots[3],
+                RestSpot.BottomLeft => spots[1],
+                _ => spots[0],
+            };
+        }
+
+        Vec2 best = spots[0];
+        double bestScore = double.MaxValue;
+        for (int i = 0; i < spots.Length; i++)
+        {
+            bool covered = false;
+            foreach (DesktopWindow win in snapshot.Windows)
+                covered |= win.Bounds.Contains(spots[i]);
+            double score = (covered ? 1e6 : 0.0) + (i >= 2 ? 5e3 : 0.0) + (spots[i] - Spider.Position).Length;
+            if (score < bestScore)
+            {
+                bestScore = score;
+                best = spots[i];
+            }
+        }
+        return best;
     }
 
     // ---- an item dragged over the spider
@@ -683,7 +828,7 @@ public sealed class SandboxView : Control
     {
         // The brain (a state machine) decides who is in charge this frame.
         Vec2? look = _brain.Think(dt, Spider, _watcher.Current,
-            new BrainContext(_isDragging, _carry.Busy, _hover, WanderEnabled && _keys.Count == 0));
+            new BrainContext(_isDragging, _carry.Busy, _hover, WanderEnabled && _keys.Count == 0, _fidget.Drowsy, _hunter.Active));
         Spider.ReachTarget = _brain.ReachPoint;
 
         if (_isDragging)

@@ -102,6 +102,8 @@ public sealed class OverlayDesktopSource : IDesktopSource, IDesktopIconControl
             caret,
             s.Typing,
             s.IdleSeconds,
-            s.LeftDown);
+            s.LeftDown,
+            s.MediaActive,
+            s.MediaCentre is Vec2 mc ? new Vec2((mc.X - OriginX) / scale, (mc.Y - OriginY) / scale) : null);
     }
 }
